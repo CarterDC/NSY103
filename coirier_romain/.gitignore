@@ -1,0 +1,9 @@
+# ignore les fichiers object
+*.o
+
+# ignore les executables
+client
+clients
+server
+server_resa
+server_consult
