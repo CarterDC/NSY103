@@ -44,7 +44,7 @@ int main(void){
     //mise en place du handler d'interruption de l'exécution
     setupSignalHandlers();
     //mise en place du socket
-    setupSocket();
+    setupListeningSocket();
 
     listen(listen_sock_fd, 10); // Queue de 10 demandes (pertinent avec server itératif)
 
@@ -63,6 +63,7 @@ int main(void){
         nb_bytes = send(service_sock_fd, &s2c_buf, sizeof(s2c_buf),0); //TODO check nb_bytes ? 
 
         //traitement terminé on retourne en attente d'acceptation de connexion
+        close(service_sock_fd);
     }
 
     exit(0); 

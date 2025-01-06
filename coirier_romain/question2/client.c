@@ -43,10 +43,11 @@ int main(void){
 
     //mise en place du handler d'interruption de l'exécution
     setupSignalHandlers();
-    //mise en place du socket
-    setupSocket();
 
     while(1) {
+        //mise en place du socket
+        setupSocket();
+
         //préparation du message en fonction des choix de l'utilisateur
         if ((request_type = getUserRequest(&c2s_buf)) == REQUEST_CONSULT) {
             //requete de consultation
@@ -75,11 +76,14 @@ int main(void){
         nb_bytes = recv(sock_fd, &s2c_buf, sizeof(s2c_buf),0); //TODO check nb_bytes ?
         if (request_type == REQUEST_CONSULT) {
             //requete de consultation
-            printf("Il reste %d places libres pour le spectacle %s.\n", s2c_buf.nb_seats, s2c_buf.show_id);
+            printf("Il reste %d places libres pour le spectacle %s.\n\n", s2c_buf.nb_seats, s2c_buf.show_id);
         } else {
             //requete de réservation
-            printf("Il reste %d places libres pour le spectacle %s.\n", s2c_buf.nb_seats, s2c_buf.show_id);
+            printf("Il reste %d places libres pour le spectacle %s.\n\n", s2c_buf.nb_seats, s2c_buf.show_id);
         }
+
+        //Fermeture du socket (un shutdown n'est pas suffisant pour reconnecter)
+        close(sock_fd);
     }
 
     exit(0); 
