@@ -14,7 +14,9 @@ par le biais d'applications clients/server en C
 
 Compilation :
 ----------------------
- prévoir un script shell pour compiler auto les fichiers du répertoire.
+ Un script bash 'compile_and_run.sh' est présent dans chaque répertoire afin
+ de compiler (avec option Werror) les fichiers sources
+ et de lancer les executables résultants de cette conpilation.
 
 Utilisation :
 -------------
@@ -36,10 +38,10 @@ coirier_romain\ : Racine du Projet
 |-question2\ : Résolution du projet avec utilisation de processus lourds
 |  |-common.h : 
 |  |-client.c : 
-|  |-server-consult.c :
-|  |-server-resa.c : 
+|  |-server.c :
+|  |-compile_and_run.sh : script bash pour compiler et lancer les 3 executables
 |
-|-??.pdf : Rapport explicatif du projet
+|-rapport.pdf : Rapport explicatif du projet
 |
 |-README.MD : Le présent fichier
 

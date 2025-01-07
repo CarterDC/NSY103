@@ -1,6 +1,6 @@
 /*******************************************************************************
  * @file common.h
- * @brief Includes et Constantes communs au client et serveur de la question 2.
+ * @brief Includes et Constantes communs aux client et serveurs de la question 2.
  * @author Romain COIRIER
  * @date 05/01/2025
  * @version 1.0
@@ -19,6 +19,8 @@
  * @bug oui ?.
  ******************************************************************************/
 
+//TODO créer un common.c avec les fonctions communes (ajouter les déclarations ici)
+
 #ifndef COMMON_H
 #define COMMON_H
 
@@ -34,15 +36,26 @@
 //signaux
 #include <signal.h>
 
-//message queue
-#include <sys/msg.h>
+// Sockets & réseaux
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <netdb.h>
 
 // erreurs
 #include <errno.h>
 
+// mémoire partagée
+
+// semaphores system V
+
 // CONSTANTES
-#define KEY_FILENAME "NSY"
-#define KEY_ID 103
+#define SERVER_IP "localhost" //devrait fonctionner pareil en IPV4 ou V6
+#define SERVER_PORT_CONSULT "49152" // premier port de la plage privée
+#define SERVER_PORT_RESA "49153"
+#define CLIENT_PORT "49154"
+
+#define KEY_FILENAME "mysemaphores"
+#define KEY_ID 422
 
 // Tableau des noms de spectacles (6 caractères exactement)
 static const char *const SHOW_IDS[] = {
@@ -66,15 +79,7 @@ typedef struct {
     signed char nb_seats; // -1,  0 ou nb places demandées / réservées
 } Message;
 
-typedef struct { 
-    long msg_type;
-    Message msg;
-    pid_t pid;
-} Request;
+//prototypes de fonctions
 
-typedef struct {
-    long msg_type;
-    Message msg;
-} Response;
 
 #endif
