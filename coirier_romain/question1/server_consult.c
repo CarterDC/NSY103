@@ -24,7 +24,7 @@
 //descripteur du socket en global pour fermeture hors de main()
 int listen_sock_fd;
 int sharedmem_id;
-int semid;
+int semset_id;
 Message *shows; // pointeur vers le futur tableau partagé
 
 //Prototypes
@@ -85,12 +85,12 @@ void initServer() {
     //mise en place / récupération du segment de mémoire partagé
     setupSharedMem(key);
     //Création ou récupération (si déjà créé) d'un tableau de 1 semaphore
-    if((semid = semget(key, 1, IPC_CREAT | IPC_EXCL | 0666)) == -1){
+    if((semset_id = semget(key, 1, IPC_CREAT | IPC_EXCL | 0666)) == -1){
         perror("Echec creation du semaphores.\n");
         exit(EXIT_FAILURE);
     }
     //Initialisation du semaphore (index 0, valeur d'init : 1)
-    semctl(semid, 0, SETVAL, 1);
+    semctl(semset_id, 0, SETVAL, 1);
 
     //mise en place du socket
     setupListeningSocket();
@@ -103,7 +103,7 @@ void sigint_handler(int sig) {
     printf("Fermeture du socket.\n");
     close(listen_sock_fd);
     printf("Suppression du semaphore.\n");
-    semctl(semid, 0, IPC_RMID, 0);
+    semctl(semset_id, 0, IPC_RMID, 0);
     printf("Détachement du segment de mémoire partagé.\n");
     shmdt(shows);
     printf("Suppression du segment partagé.\n");
@@ -233,12 +233,12 @@ void getNbSeats(Message *msg) {
     //prélude
     operations[0].sem_num = 0;
     operations[0].sem_op = -1; //P()
-    semop(semid, operations, 1);
+    semop(semset_id, operations, 1);
     //section critique
     msg->nb_seats = shows[i].nb_seats;
     //postlude
     operations[0].sem_num = 0;
     operations[0].sem_op = 1; //V()
-    semop(semid, operations, 1);    
+    semop(semset_id, operations, 1);    
     return;
 }

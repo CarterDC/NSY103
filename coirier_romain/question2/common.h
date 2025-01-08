@@ -16,7 +16,7 @@
  *     > 0 en consultation : réponse ; en réservation : demande / accusé
  *     < 0 en réservation refus avec indication des places restantes
  * 
- * @bug oui ?.
+ * @bug ?.
  ******************************************************************************/
 
 #ifndef COMMON_H

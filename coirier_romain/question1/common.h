@@ -1,8 +1,8 @@
 /*******************************************************************************
  * @file common.h
- * @brief Includes et Constantes communs aux client et serveurs de la question 2.
+ * @brief Includes et Constantes communs aux client et serveurs de la question 1.
  * @author Romain COIRIER
- * @date 05/01/2025
+ * @date 08/01/2025
  * @version 1.0
  * 
  * Contient aussi la structure des messages partagés par l'ensemble des clients
@@ -44,18 +44,13 @@
 // erreurs
 #include <errno.h>
 
-// mémoire partagée
-
-// semaphores system V
-
 // CONSTANTES
 #define SERVER_IP "localhost" //devrait fonctionner pareil en IPV4 ou V6
-#define SERVER_PORT_CONSULT "49152" // premier port de la plage privée
-#define SERVER_PORT_RESA "49153"
-#define CLIENT_PORT "49154"
+#define SERVER_PORT "49152" // premier port de la plage privée
+#define CLIENT_PORT "49153"
 
-#define KEY_FILENAME "mysemaphores"
-#define KEY_ID 422
+#define KEY_FILENAME "NSY"
+#define KEY_ID 103
 
 // Tableau des noms de spectacles (6 caractères exactement)
 static const char *const SHOW_IDS[] = {
