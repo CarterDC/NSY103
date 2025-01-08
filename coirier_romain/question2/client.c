@@ -28,6 +28,7 @@ int getUserRequest(Message *msg);
 void getShowId(Message *msg);
 int getRequestType(Message *msg);
 void getNbSeatsRequested(Message *msg);
+void displayResponse(Response msg_resp, Request msg_req);
 
 int main(void){
 
@@ -71,16 +72,7 @@ int main(void){
             exit(EXIT_FAILURE);
         }
 
-
-        if (msg_req.msg_type == REQUEST_CONSULT) {
-            //requete de consultation
-            printf("Il reste %d places libres pour le spectacle %s.\n\n", msg_resp.msg.nb_seats, msg_resp.msg.show_id);
-        } else {
-            //requete de réservation
-            // TODO: algo résa 
-            printf("Il reste %d places libres pour le spectacle %s.\n\n", msg_resp.msg.nb_seats, msg_resp.msg.show_id);
-        }
-
+        displayResponse(msg_resp, msg_req);
     }
 }
 
@@ -116,6 +108,28 @@ void setupMsgQueue(key_t key) {
             exit(EXIT_FAILURE);            
         }
     }
+}
+
+void displayResponse(Response msg_resp, Request msg_req){
+        //show_id inexistant (toute la structure msg est remplie de 0)
+        if(msg_resp.msg.show_id[0] == '\0') {
+            printf("Le serveur indique que le spectacle %s n existe pas.\n\n", msg_req.msg.show_id);
+            return;
+        }
+
+        if (msg_req.msg_type == REQUEST_CONSULT) {
+            //requete de consultation
+            printf("Il reste %d places libres pour le spectacle %s.\n\n", msg_resp.msg.nb_seats, msg_resp.msg.show_id);
+        } else {
+            //requete de réservation
+            if(msg_resp.msg.nb_seats > 0) { 
+                printf("Reservation confirmee de %d places\
+ pour le spectacle %s.\n\n", msg_resp.msg.nb_seats, msg_resp.msg.show_id); 
+            } else {
+                printf("Reservation impossible de %d places ;\
+ %d disponibles pour le spectacle %s.\n\n", msg_req.msg.nb_seats, msg_resp.msg.nb_seats, msg_resp.msg.show_id);
+            }            
+        }
 }
 
 /**

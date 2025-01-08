@@ -37,6 +37,7 @@ int getNbShows();
 void setupMsgQueue(key_t key);
 void initServer();
 void getNbSeats(Message *msg);
+void bookSeats(Message *msg);
 
 int main(void){
 
@@ -89,9 +90,9 @@ int main(void){
                 //process fils
                 printf("Requete de Reservation de %d places pour le spectacle %s.\n", msg_req.msg.nb_seats, msg_req.msg.show_id);
                 msg_resp.msg_type = msg_req.pid;
-                strncpy(msg_resp.msg.show_id, msg_req.msg.show_id, SHOW_ID_LEN);
+                msg_resp.msg = msg_req.msg;
 
-                getNbSeats(&msg_resp.msg);
+                bookSeats(&msg_resp.msg);
                 // envoi de la réponse
                 if((return_value = msgsnd(msg_queue_id, &msg_resp, sizeof(Response) - sizeof(long), 0)) == -1) {
                     perror("Echec msgsnd.\n");
@@ -262,6 +263,42 @@ void getNbSeats(Message *msg) {
     semop(semid, operations, 1);
     //section critique
     msg->nb_seats = shows[i].nb_seats;
+    //postlude
+    operations[0].sem_num = 0;
+    operations[0].sem_op = 1; //V()
+    semop(semid, operations, 1);    
+    return;
+}
+
+void bookSeats(Message *msg) {
+    struct sembuf operations[1];
+    // recherche de l'index du spectacle
+    bool found = false;
+    int i = -1;
+    while(!found && (shows[++i].show_id[0] != '\0')) {
+        found = strcmp(msg->show_id, shows[i].show_id) == 0;
+    }
+    if(!found) {
+        //le spectacle demandé n'a pas été trouvé dans la liste
+        //on met tous les bits du message à 0 pour le signifier
+        memset(msg, 0, sizeof(Message));
+        return;
+    }
+    
+    //accès en écriture au segment partagé
+
+    //prélude
+    operations[0].sem_num = 0;
+    operations[0].sem_op = -1; //P()
+    semop(semid, operations, 1);
+    //section critique
+    if(msg->nb_seats <= shows[i].nb_seats) {
+        //il reste assez de places
+        shows[i].nb_seats = shows[i].nb_seats - msg->nb_seats;
+    } else {
+        //il ne reste pas assez de places pour honorer la réservation entière
+        msg->nb_seats = -1 * shows[i].nb_seats;
+    }
     //postlude
     operations[0].sem_num = 0;
     operations[0].sem_op = 1; //V()
