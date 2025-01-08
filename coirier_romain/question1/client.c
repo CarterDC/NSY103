@@ -1,16 +1,17 @@
 /*******************************************************************************
  * @file client.c
- * @brief Implémentation du programme client de la question 2.
+ * @brief Implémentation du programme client de la question 1.
  * @author Romain COIRIER
- * @date 05/01/2025
+ * @date 08/01/2025
  * @version 1.0
- *
+ * 
  * cf common.h
- *
- * @note il y a 1 server différent pour chaque opération : consultation ou réservation
- *
- *
- * @bug .
+ * Envoie les requêtes de l'utilisateur (consultation ou réservation) au server,
+ *  via socket TCP (avec connexion).
+ * 
+ * @note Ce client permet de faire de multiples requêtes à la suite 
+ * 
+ * @bug ?
  ******************************************************************************/
 
 #include "common.h"
@@ -18,89 +19,107 @@
 // descripteur du socket en global pour fermeture hors de main()
 int sock_fd;
 
-// déclarations
+// prototypes de fonctions
 void sigint_handler(int sig);
 
 void setupSignalHandlers();
 void setupSocket();
 void getServerAddrInfo(struct addrinfo **serv_info);
-void initClient();
+void initClient(struct addrinfo *serv_info);
 
 int getUserRequest(Message *msg);
 void requestShowId(Message *msg);
 int getRequestType(Message *msg);
 void requestNbSeatsToBook(Message *msg);
 
+void displayResponse(Message msg_resp, Message msg_req, int rq_type);
+
+/**
+ * main()
+ * TODO !!
+ * 
+ */
 int main(void)
 {
 
-    printf("PROJET NSY103 - QUESTION 2.\n");
+    printf("PROJET NSY103 - QUESTION 1.\n");
     printf("Client.\n");
     printf("===========================\n");
 
-    // variables
+    //
     int return_value, request_type, nb_bytes;
-
+    struct addrinfo *serv_info;
     Message c2s_buf, s2c_buf; // structs des messages clients vers server et retour
+
+    setupSignalHandlers();
+    getServerAddrInfo(&serv_info);
 
     while (1)
     {
-
         // préparation du message en fonction des choix de l'utilisateur
-        if ((request_type = getUserRequest(&c2s_buf)) == REQUEST_CONSULT)
-        {
-            // requete de consultation
-            printf("Requete de Consultation pour le spectacle %s.\n", c2s_buf.show_id);
-        }
-        else
-        {
-            // requete de réservation
-            printf("Requete de Reservation de %d places pour le spectacle %s.\n", c2s_buf.nb_seats, c2s_buf.show_id);
-        }
+        request_type = getUserRequest(&c2s_buf) == REQUEST_CONSULT;
 
+        setupSocket();
+        // blocage en attendant la connexion au server
+        if ((return_value = connect(sock_fd, serv_info->ai_addr, serv_info->ai_addrlen)) != 0)
+        {
+            perror("Echec de connexion !\n");
+            fprintf(stderr, "Erreur %d : %s\n", errno, strerror(errno));
+            printf("Fermeture du socket.\n");
+            close(sock_fd);
+            exit(EXIT_FAILURE);
+        }
         // envoi de la requête
         nb_bytes = send(sock_fd, &c2s_buf, sizeof(c2s_buf), 0);
         // TODO vérif du nb_bytes envoyés
         // attente de la réponse
         nb_bytes = recv(sock_fd, &s2c_buf, sizeof(s2c_buf), 0); // TODO check nb_bytes ?
-        if (request_type == REQUEST_CONSULT)
-        {
-            // requete de consultation
-            printf("Il reste %d places libres pour le spectacle %s.\n\n", s2c_buf.nb_seats, s2c_buf.show_id);
-        }
-        else
-        {
-            // requete de réservation
-            printf("Il reste %d places libres pour le spectacle %s.\n\n", s2c_buf.nb_seats, s2c_buf.show_id);
-        }
+        // TODO vérif du nb_bytes reçus
+        
+        displayResponse(s2c_buf, c2s_buf, request_type);
+        close(sock_fd);
     }
 }
 
-// handler pour signal SIGINT
+/**
+ * @brief Gère le signal d'interruption (SIGINT).
+ *
+ * Affiche un message d'adieu et termine proprement le programme.
+ *
+ * @param sig Le numéro du signal (non utilisé dans cette fonction).
+ */
 void sigint_handler(int sig)
 {
     printf("\n");
     printf("Fermeture du socket.\n");
     close(sock_fd);
+
     // on met fin au programme
     printf("Au revoir.\n");
     exit(EXIT_SUCCESS);
 }
 
-void setupSignalHandlers()
-{
-    // mise en place du handler d'interruption de l'exécution
+/**
+ * @brief Mets en place les handlers de signaux pour le process.
+ * ici uniquement SIGINT
+ */
+void setupSignalHandlers() {
+
+    // Mise en place du handler d'interruption de l'exécution
     struct sigaction sa;
     sa.sa_handler = sigint_handler;
     sa.sa_flags = 0;
-    if (sigaction(SIGINT, &sa, NULL) == -1)
-    {
+    if (sigaction(SIGINT, &sa, NULL) == -1) {
         perror("Erreur sigaction.\n");
         exit(EXIT_FAILURE);
     }
+    // Affiche la méthode de déclenchement du signal 
     printf("'Ctrl + c' pour mettre fin au programme.\n");
 }
 
+/**
+ * @brief TODO
+ */
 void setupSocket()
 {
     int return_value;
@@ -136,6 +155,9 @@ void setupSocket()
     }
 }
 
+/**
+ * @brief TODO
+ */
 void getServerAddrInfo(struct addrinfo **serv_info)
 {
     int return_value;
@@ -156,25 +178,57 @@ void getServerAddrInfo(struct addrinfo **serv_info)
     }
 }
 
-void initClient()
+/**
+ * @brief Initialise le client.
+ *
+ * Configure les handlers de signaux
+ * Crée le socket TCP et l'address info du server
+ */
+void initClient(struct addrinfo *serv_info)
 {
-    int return_value;
-    struct addrinfo *serv_info;
-
     // mise en place du handler d'interruption de l'exécution
     setupSignalHandlers();
+
     // mise en place du socket
     setupSocket();
+
     // création de l'address info du server adapté à la requête
     getServerAddrInfo(&serv_info);
-    // blocage en attendant la connexion au server
-    if ((return_value = connect(sock_fd, serv_info->ai_addr, serv_info->ai_addrlen)) != 0)
-    {
-        perror("Echec de connexion !\n");
-        fprintf(stderr, "Erreur %d : %s\n", errno, strerror(errno));
-        printf("Fermeture du socket.\n");
-        close(sock_fd);
-        exit(EXIT_FAILURE);
+
+}
+
+/**
+ * @brief Affiche la réponse reçue du serveur en fonction du type de requête.
+ *
+ * Si l'identifiant du spectacle n'existe pas, un message d'erreur est affiché.
+ * Un nombre de places strictement positif indique une réservation acceptée.
+ * Si la réservation est refusée, un nombre de places négatif indique le nb de places restantes.
+ * 
+ * @param msg_resp La réponse du serveur
+ * @param msg_req La requête initiale de l'utilisateur
+ */
+void displayResponse(Message msg_resp, Message msg_req, int rq_type) {
+    
+    //si la structure est remplie de 0, le server indique que le show n'existe pas
+    if (msg_resp.show_id[0] == '\0') {        
+        printf("Le serveur indique que le spectacle %s n existe pas.\n\n",
+            msg_req.show_id);
+        return;
+    }
+
+    if (rq_type == REQUEST_CONSULT) {
+        // Requête de consultation
+        printf("Il reste %d places libres pour le spectacle %s.\n\n", 
+            msg_resp.nb_seats, msg_resp.show_id);
+    } else {
+        // Requête de réservation
+        if (msg_resp.nb_seats > 0) {
+            printf("Reservation confirmee de %d places pour le spectacle %s.\n\n",
+                msg_resp.nb_seats, msg_resp.show_id);
+        } else {
+            printf("Reservation impossible de %d places ; %d disponibles pour le spectacle %s.\n\n", 
+                msg_req.nb_seats, -1 * msg_resp.nb_seats, msg_resp.show_id);
+        }
     }
 }
 
@@ -213,7 +267,8 @@ int getUserRequest(Message *msg)
             fprintf(stderr, "Saisie non valide.\n");
         }
     }
-
+    printf("userRequest fini");
+    fflush(stdout);
     return request_type;
 }
 
@@ -248,6 +303,7 @@ void requestShowId(Message *msg)
         printf(" :\n");
 
         //attend une saisie de 6 caractères
+        // (les char en plus ne sont pas pris en compte)
         if (scanf("%6s", msg->show_id) == 1) // Attention, magic number '6' !
         { 
             // on rajoute une terminaison de chaine comme dernière caractere
@@ -257,6 +313,8 @@ void requestShowId(Message *msg)
         else
         {
             fprintf(stderr, "Saisie non valide.\n");
+            // Vide le buffer d'entrée pour éviter une boucle infinie
+            while (getchar() != '\n');
         }
     }
     return;
@@ -279,8 +337,8 @@ int getRequestType(Message *msg)
     // Demande un type de requête tant que la saisie n'est pas valide
     while (!is_valid_input)
     {
-        printf("Choisissez votre requête pour %s\n \
-(%d)-> Consultation, (%d)-> Réservation :\n",
+        printf("Choisissez votre requete pour %s\n \
+(%d)-> Consultation, (%d)-> Reservation :\n",
                msg->show_id, REQUEST_CONSULT, REQUEST_RESA);
         if (scanf("%d", &request_type) == 1)
         {
@@ -289,6 +347,8 @@ int getRequestType(Message *msg)
         else
         {
             fprintf(stderr, "Saisie non valide.\n"); // ex: caractères non numériques
+            // Vide le buffer d'entrée pour éviter une boucle infinie
+            while (getchar() != '\n');
         }
     }
     return request_type;
@@ -311,22 +371,20 @@ void requestNbSeatsToBook(Message *msg)
     // Demande un nombre de places tant que la saisie n'est pas valide
     while (!is_valid_input)
     {
-        printf("Combien de places souhaitez-vous réserver pour %s (0-127) :\n", msg->show_id);
+        printf("Combien de places souhaitez-vous reserver pour %s (1-127) :\n", msg->show_id);
 
-        // Vérifie si l'utilisateur a saisi un entier et s'il est dans la plage valide (0-127)
-        if ((scanf("%d", &nb_seats) == 1) && ((nb_seats >= 0) && (nb_seats <= 127)))
+        // Vérifie si l'utilisateur a saisi un entier et s'il est dans la plage valide (1-127)
+        if ((scanf("%d", &nb_seats) == 1) && ((nb_seats > 0) && (nb_seats <= 127)))
         {
             is_valid_input = true;
         }
         else
         {
-            fprintf(stderr, "Saisie non valide. Veuillez entrer un nombre entre 0 et 127.\n");
+            fprintf(stderr, "Saisie non valide.\n");
             // Vide le buffer d'entrée pour éviter une boucle infinie
-            int ch ; 
             while (getchar() != '\n');
         }
     }
 
     msg->nb_seats = (signed char)nb_seats;
 }
-

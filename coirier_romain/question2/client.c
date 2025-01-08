@@ -85,7 +85,7 @@ int main(void){
  * @param sig Le numéro du signal (non utilisé dans cette fonction).
  */
 void sigint_handler(int sig) {
-    // Affiche une ligne vide pour séparer le message d'adieu
+
     printf("\n");
 
     // coté client, on ne ferme pas la messageQueue
@@ -98,7 +98,7 @@ void sigint_handler(int sig) {
 
 /**
  * @brief Mets en place les handlers de signaux pour le process.
- * 
+ * ici uniquement SIGINT
  */
 void setupSignalHandlers() {
 

@@ -33,6 +33,7 @@ Message *shows;   // pointeur vers le futur tableau partagé
 void sigint_handler(int sig);
 
 void setupSignalHandlers();
+void setupSemaphoreSet(key_t key);
 void setupSharedMem(key_t key);
 void populateSharedMem();
 int getNbShows();
@@ -167,13 +168,27 @@ void initServer()
 
     // Génération de la clé pour la mémoire partagée et le sémaphore
     key_t key = ftok(KEY_FILENAME, KEY_ID);
+
+    // mise en place du tableau des sémaphores
+    setupSemaphoreSet(key);
+
     // mise en place / récupération du segment de mémoire partagé
     setupSharedMem(key);
+    
+    // Création / récupération de la message queue
+    setupMsgQueue(key);
+
+    setbuf(stdout, NULL);
+    printf("'Ctrl + c' pour mettre fin aux programmes.\n");
+}
+
+void setupSemaphoreSet(key_t key) {
     // Création ou récupération (si déjà créé) d'un tableau de 1 semaphore
     if ((semset_id = semget(key, 1, IPC_CREAT | IPC_EXCL | 0666)) == -1)
     {
         if (errno == EEXIST)
         {
+            //le tableau de semaphore existe déjà, on le récupère
             semset_id = semget(key, 1, 0666);
         }
         else
@@ -182,17 +197,10 @@ void initServer()
             fprintf(stderr, "Erreur %d : %s\n", errno, strerror(errno));
             exit(EXIT_FAILURE);
         }
-    }
+    }    
     // Initialisation du semaphore (index 0, valeur d'init : 1)
     semctl(semset_id, 0, SETVAL, 1);
-
-    // Création / récupération de la message queue
-    setupMsgQueue(key);
-
-    setbuf(stdout, NULL);
-    printf("'Ctrl + c' pour mettre fin aux programmes.\n");
 }
-
 
 void setupSharedMem(key_t key)
 {
@@ -201,8 +209,9 @@ void setupSharedMem(key_t key)
     shm_size = (getNbShows() + 1) * sizeof(Message);
 
     // récupération du segment de mémoire partagée
-    if ((sharedmem_id = shmget(key, shm_size, 0666)) != 0)
+    if ((sharedmem_id = shmget(key, shm_size, 0666)) == -1)
     {
+        
         if (errno == ENOENT)
         {
             // le segment n'existe pas encore, => on le crée

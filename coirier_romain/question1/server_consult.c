@@ -1,46 +1,45 @@
 /*******************************************************************************
  * @file server_consult.c
- * @brief Implémentation du serveur de consultation de la question 2.
+ * @brief Implémentation du serveur de consultation de la question 1.
  * @author Romain COIRIER
- * @date 06/01/2025
+ * @date 08/01/2025
  * @version 1.0
  * 
  * cf common.h
  * Ce serveur accepte des connections (TCP) 
- * et traite les requetes en lecture seule de façon séquentielle (itérative)
  * 
- * @note Ce serveur accède au segment de mémoire partagée (table des spectacles) 
- * en lecture seule, selon les règles de synchronisation de l'exclusion mutuelle.
+ * 
+ * @note .
  * 
  * @bug .
  ******************************************************************************/
 
 #include "common.h"
-#include <sys/ipc.h>
-#include <sys/shm.h>
+
 #include <sys/sem.h>
 #include <time.h>
 
-//descripteur du socket en global pour fermeture hors de main()
-int listen_sock_fd;
-int sharedmem_id;
-int semset_id;
+// variables globales
+int listen_sock_fd; //descripteur du socket d'écoute TCP
+int semset_id; // l'identifiant du tableau des sméphores System V
 Message *shows; // pointeur vers le futur tableau partagé
 
 //Prototypes
 void sigint_handler(int sig);
+
 void setupSignalHandlers();
-void setupSharedMem(key_t key);
+void setupSemaphoreSet(key_t key);
 void populateSharedMem();
 int getNbShows();
 void setupListeningSocket();
 void initServer();
+
 void getNbSeats(Message *msg);
 
 int main(void){
 
-    printf("PROJET NSY103 - QUESTION 2.\n");
-    printf("Serveur de Consultation.\n");
+    printf("PROJET NSY103 - QUESTION 1.\n");
+    printf("Serveur.\n");
     printf("===========================\n");
 
     // variables
@@ -58,7 +57,7 @@ int main(void){
         //créa d'une socket de service à l'acceptation de la connexion
         service_sock_fd = accept(listen_sock_fd, &client_addr, &addr_len);
         
-        // traitement séquntiel de la requête avant d'accepter une nouvelle connexion
+        // traitement séquentiel de la requête avant d'accepter une nouvelle connexion
         // réception de la requête
         nb_bytes = recv(service_sock_fd, &c2s_buf, sizeof(c2s_buf),0); //TODO check nb_bytes ? 
         printf("SC : Requete de Consultation pour le spectacle %s.\n", c2s_buf.show_id);
@@ -74,28 +73,6 @@ int main(void){
 
 }
 
-void initServer() {
-    srand(time(NULL)); // reset de la seed pour le nb de places aléatoire
-
-    //mise en place du handler d'interruption de l'exécution
-    setupSignalHandlers();
-
-    // Génération de la clé pour la mémoire partagée et le sémaphore
-    key_t key = ftok(KEY_FILENAME, KEY_ID);
-    //mise en place / récupération du segment de mémoire partagé
-    setupSharedMem(key);
-    //Création ou récupération (si déjà créé) d'un tableau de 1 semaphore
-    if((semset_id = semget(key, 1, IPC_CREAT | IPC_EXCL | 0666)) == -1){
-        perror("Echec creation du semaphores.\n");
-        exit(EXIT_FAILURE);
-    }
-    //Initialisation du semaphore (index 0, valeur d'init : 1)
-    semctl(semset_id, 0, SETVAL, 1);
-
-    //mise en place du socket
-    setupListeningSocket();
-}
-
 // handler pour signal SIGINT
 void sigint_handler(int sig) {
 
@@ -104,10 +81,6 @@ void sigint_handler(int sig) {
     close(listen_sock_fd);
     printf("Suppression du semaphore.\n");
     semctl(semset_id, 0, IPC_RMID, 0);
-    printf("Détachement du segment de mémoire partagé.\n");
-    shmdt(shows);
-    printf("Suppression du segment partagé.\n");
-    shmctl(sharedmem_id, IPC_RMID, NULL);
     
     printf("Au revoir.\n");
     exit(EXIT_SUCCESS);
@@ -125,33 +98,44 @@ void setupSignalHandlers() {
     printf("'Ctrl + c' pour mettre fin au programme.\n");
 }
 
-void setupSharedMem(key_t key){
-    //mise en place du segment de mémoire partagée
-    size_t shm_size;
-    shm_size = (getNbShows() + 1) * sizeof(Message);
+void initServer()
+{
+    srand(time(NULL)); // reset de la seed pour le nb de places aléatoire
 
-    // récupération du segment de mémoire partagée
-    if((sharedmem_id = shmget(key, shm_size, 0666)) != 0) {
-        if(errno == ENOENT) {
-            //le segment n'existe pas encore, => on le crée
-            printf("Creation du segemnt de memoire partage.\n");
-            sharedmem_id = shmget(key, shm_size, 0666 | IPC_CREAT);
-            //attachement du segment créé à l'espace d'adressage du process
-            if ((shows = (Message *)shmat(sharedmem_id, NULL, 0)) == (Message *) -1) {
-                perror("Erreur lors de l attachement a la memoire partagee");
-                exit(EXIT_FAILURE);
-            }
-            //instanciation du tableau des spectacles
-            populateSharedMem();
+    // mise en place du handler d'interruption de l'exécution
+    setupSignalHandlers();
 
-        } else {
-            perror("Erreur creation du segment de memoire partage.\n");
+    // Génération de la clé pour la mémoire partagée et le sémaphore
+    key_t key = ftok(KEY_FILENAME, KEY_ID);
+
+    // mise en place du tableau des sémaphores
+    setupSemaphoreSet(key);
+
+    //remplissage du tableau des spectacles
+    populateSharedMem();
+
+    //mise en place du socket
+    setupListeningSocket();
+}
+
+void setupSemaphoreSet(key_t key) {
+    // Création ou récupération (si déjà créé) d'un tableau de 1 semaphore
+    if ((semset_id = semget(key, 1, IPC_CREAT | IPC_EXCL | 0666)) == -1)
+    {
+        if (errno == EEXIST)
+        {
+            //le tableau de semaphore existe déjà, on le récupère
+            semset_id = semget(key, 1, 0666);
+        }
+        else
+        {
+            perror("Echec creation du semaphore.\n");
             fprintf(stderr, "Erreur %d : %s\n", errno, strerror(errno));
             exit(EXIT_FAILURE);
         }
-    } else {
-        printf("Recuperation du segemnt de memoire partage.\n");
-    }
+    }    
+    // Initialisation du semaphore (index 0, valeur d'init : 1)
+    semctl(semset_id, 0, SETVAL, 1);
 }
 
 void populateSharedMem(){
@@ -187,16 +171,16 @@ void setupListeningSocket() {
    int return_value;
     struct addrinfo hints, *server_info;
 
-    //création de l'address info du server de consultation (nous): server_info
+    //création de l'address info du server (nous): server_info
     memset(&hints, 0, sizeof(hints));
     hints.ai_family = AF_UNSPEC; // utilise IPV4 ou IPV6
     hints.ai_socktype = SOCK_STREAM; //TCP
-    if((return_value = getaddrinfo(SERVER_IP, SERVER_PORT_CONSULT, &hints, &server_info)) != 0) {
-        perror("Erreur creation adresse server consultation\n");
+    if((return_value = getaddrinfo(SERVER_IP, SERVER_PORT, &hints, &server_info)) != 0) {
+        perror("Erreur creation adresse server \n");
         exit(EXIT_FAILURE);
     }
 
-    //création du socket et association à l'adresse (et port) du client.
+    //création du socket et association à notre adresse .
     listen_sock_fd = socket(server_info->ai_family, server_info->ai_socktype, server_info->ai_protocol);
     if(listen_sock_fd == -1) {
         perror("Erreur creation du socket d ecoute\n");
