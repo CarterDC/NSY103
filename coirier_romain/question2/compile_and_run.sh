@@ -32,4 +32,4 @@ echo "Lancement du serveur..."
 sleep 1 # Delai pour l'init des serveurs
 
 echo "Lancement du client..."
-gnome-terminal -- ./client
+gnome-terminal -- ./$CLIENT_OUT

@@ -44,6 +44,8 @@
 #define KEY_FILENAME "NSY"
 #define KEY_ID 103
 
+#define RESOURCE_SEM 0 // indexes du semaphore dans la table
+
 // Tableau des noms de spectacles (6 caractères exactement)
 static const char *const SHOW_IDS[] = {
     "NSY103",

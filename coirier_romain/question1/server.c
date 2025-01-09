@@ -16,6 +16,7 @@
 
 #include "common.h"
 
+#include <pthread.h>
 #include <sys/sem.h>
 #include <time.h>
 
@@ -23,18 +24,30 @@
 int listen_sock_fd; //descripteur du socket d'écoute TCP
 int semset_id; // l'identifiant du tableau des sméphores System V
 Message *shows; // pointeur vers le futur tableau partagé
+int thread_ids[NB_WORKER_THREADS]; // de 1 à 6
+pthread_t threads[NB_WORKER_THREADS]; // tableau des worker threads
+bool stop_threads; //
 
 //Prototypes
 void sigint_handler(int sig);
 
 void setupSignalHandlers();
 void setupSemaphoreSet(key_t key);
-void populateSharedMem();
+void populateResource();
 int getNbShows();
 void setupListeningSocket();
 void initServer();
 
 void getNbSeats(Message *msg);
+
+void* workerThread(void* arg) {
+    int thread_id = *(int*)arg;
+    printf("Demarrage thread N%d.\n", thread_id);
+    while(!stop_threads){
+
+    }
+    pthread_exit(NULL);
+}
 
 int main(void){
 
@@ -42,16 +55,17 @@ int main(void){
     printf("Serveur.\n");
     printf("===========================\n");
 
-    // variables
     int service_sock_fd, nb_bytes;
     struct sockaddr client_addr; // adresse du client 
     int addr_len = sizeof(client_addr);
     Message s2c_buf, c2s_buf; //structs des messages server vers client et retour
 
-    //mise en place du segment partagé, du sémaphore binaire et du socket d'écoute
+    //mise en place des sémaphores, de la ressource paratgée et du socket d'écoute
+    //mise en palce de la message queue et des threads
     initServer();
 
-    listen(listen_sock_fd, 10); // Queue de 10 demandes (pertinent avec server itératif)
+    listen(listen_sock_fd, 10); // Queue de 10 demandes
+    printf("Serveur en attente de requetes reservation ou consultation...\n");
 
     while(1) {
         //créa d'une socket de service à l'acceptation de la connexion
@@ -70,7 +84,6 @@ int main(void){
         //traitement terminé on retourne en attente d'acceptation de connexion
         close(service_sock_fd);
     }
-
 }
 
 // handler pour signal SIGINT
@@ -79,8 +92,23 @@ void sigint_handler(int sig) {
     printf("\n");
     printf("Fermeture du socket.\n");
     close(listen_sock_fd);
+
+    //demande d'arrêt des threads
+    stop_threads = true;
+    //attente de l'arret des threads
+    for(int i = 0; i<NB_WORKER_THREADS; i++) {
+        if (pthread_join(threads[i], NULL) != 0) { 
+            perror("Echec synchro thread.\n"); 
+            exit(EXIT_FAILURE);
+        }
+        printf("Arret thread N%d.\n", i+1); 
+    }
+
     printf("Suppression du semaphore.\n");
     semctl(semset_id, 0, IPC_RMID, 0);
+
+    printf("Liberation de la memoire.\n");
+    free(shows);
     
     printf("Au revoir.\n");
     exit(EXIT_SUCCESS);
@@ -105,27 +133,43 @@ void initServer()
     // mise en place du handler d'interruption de l'exécution
     setupSignalHandlers();
 
-    // Génération de la clé pour la mémoire partagée et le sémaphore
+    // Génération de la clé pour le sémaphore
     key_t key = ftok(KEY_FILENAME, KEY_ID);
+    /*if (key == -1) {
+        perror("Echec creation de la clef.\n");
+        exit(EXIT_FAILURE);
+    }*/
 
     // mise en place du tableau des sémaphores
     setupSemaphoreSet(key);
+    //mise en place d'une message queue pour déposer les requetes (les ids de service socket)
 
-    //remplissage du tableau des spectacles
-    populateSharedMem();
+    //allocation et remplissage du tableau des spectacles
+    shows = (Message *) malloc((getNbShows() + 1) * sizeof(Message));
+    populateResource();
 
     //mise en place du socket
     setupListeningSocket();
+
+    //création de NB_WORKER_THREADS worker threads pour gérer les requetes
+
+    for(int i = 0; i<NB_WORKER_THREADS; i++) {
+        thread_ids[i] = i + 1; // threads numérotés en base 1 
+        if (pthread_create(&threads[i], NULL, workerThread, (void *)&thread_ids[i] ) != 0) { 
+            perror("Echec creation thread.\n"); 
+            exit(EXIT_FAILURE);
+        } 
+    }
 }
 
 void setupSemaphoreSet(key_t key) {
-    // Création ou récupération (si déjà créé) d'un tableau de 1 semaphore
-    if ((semset_id = semget(key, 1, IPC_CREAT | IPC_EXCL | 0666)) == -1)
+    // Création ou récupération (si déjà créé) d'un tableau de 3 semaphores
+    if ((semset_id = semget(key, 3, IPC_CREAT | IPC_EXCL | 0666)) == -1)
     {
         if (errno == EEXIST)
         {
             //le tableau de semaphore existe déjà, on le récupère
-            semset_id = semget(key, 1, 0666);
+            semset_id = semget(key, 3, 0666);
         }
         else
         {
@@ -134,29 +178,54 @@ void setupSemaphoreSet(key_t key) {
             exit(EXIT_FAILURE);
         }
     }    
-    // Initialisation du semaphore (index 0, valeur d'init : 1)
-    semctl(semset_id, 0, SETVAL, 1);
+    // Initialisation des semaphores (tous init à 1)
+    semctl(semset_id, NB_READERS_MUTEX, SETVAL, 1); //protection de nb_readers en exclusion mutuelle
+    semctl(semset_id, QUEUE_SEM, SETVAL, 1); //queue de service pour l'équité d'accès
+    semctl(semset_id, RESOURCE_SEM, SETVAL, 1); //protection de la resource partagée (shows[])
 }
 
-void populateSharedMem(){
-    //TODO : protection de la resource par le mutex ? 
+/**
+ * @brief Remplit la resource partagée shows[] avec les données des spectacle
+ * 
+ * l'accès en écriture à la ressource est protégé par un jeu de sémaphores
+ * en appliquant une synchronisation de type lecteurs/rédacteur avec file d'attente
+ * 
+ * @note le nombre de places est décidé au hasard entre 16 et 30
+ * un indicateur de fin de tableau est signifié par tous les bits de la structure à 0
+ */
+void populateResource()
+{
+    //accès en écriture sur la ressource partagée => on protège par sémaphores
+    struct sembuf operations[3];
 
-    //instanciation du tableau des spectacles
-    int i = 0;
-    while(SHOW_IDS[i] != NULL) {
-        strncpy(shows[i].show_id, SHOW_IDS[i], SHOW_ID_LEN);
-        shows[i].nb_seats = 16 + rand() % 15;
-        i++;
-    }
-    memset(&shows[++i], 0, sizeof(Message));
+    // prélude
+    operations[QUEUE_SEM].sem_num = 0;
+    operations[QUEUE_SEM].sem_op = -1; // ServiceQueue.P()
+    operations[RESOURCE_SEM].sem_num = 0;
+    operations[RESOURCE_SEM].sem_op = -1; // Ressource.P()
+    operations[QUEUE_SEM].sem_num = 0;
+    operations[QUEUE_SEM].sem_op = 1; // ServiceQueue.V()
+    semop(semset_id, operations, 3);
 
-    //vérification du tableau
-    i = 0;
-    while(shows[i].show_id[0] != '\0') {
-        printf("%d) %s : %d places.\n", i, shows[i].show_id, shows[i].nb_seats);
-        i++;
-    }
+    // Entrée en section critique
+        // instanciation du tableau des spectacles
+        int i = 0;
+        while (SHOW_IDS[i] != NULL)
+        {
+            strncpy(shows[i].show_id, SHOW_IDS[i], SHOW_ID_LEN);
+            shows[i].nb_seats = 16 + rand() % 15;
+            i++;
+        }
+        // terminaison du tableau
+        memset(&shows[++i], 0, sizeof(Message));
+    // Sortie de section critique
+
+    // postlude
+    operations[RESOURCE_SEM].sem_num = 0;
+    operations[RESOURCE_SEM].sem_op = 1; // Ressource.V()
+    semop(semset_id, operations, 1);
 }
+
 
 int getNbShows() {
     int i = 0;

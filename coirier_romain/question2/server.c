@@ -35,7 +35,7 @@ void sigint_handler(int sig);
 void setupSignalHandlers();
 void setupSemaphoreSet(key_t key);
 void setupSharedMem(key_t key);
-void populateSharedMem();
+void populateResource();
 int getNbShows();
 void setupMsgQueue(key_t key);
 void initServer();
@@ -168,6 +168,10 @@ void initServer()
 
     // Génération de la clé pour la mémoire partagée et le sémaphore
     key_t key = ftok(KEY_FILENAME, KEY_ID);
+    /*if (key == -1) {
+        perror("Echec creation de la clef.\n");
+        exit(EXIT_FAILURE);
+    }*/
 
     // mise en place du tableau des sémaphores
     setupSemaphoreSet(key);
@@ -224,7 +228,7 @@ void setupSharedMem(key_t key)
                 exit(EXIT_FAILURE);
             }
             // instanciation du tableau des spectacles
-            populateSharedMem();
+            populateResource();
         }
         else
         {
@@ -239,32 +243,41 @@ void setupSharedMem(key_t key)
     }
 }
 
-
-void populateSharedMem()
+/**
+ * @brief Remplit la resource partagée shows[] avec les données des spectacle
+ * 
+ * l'accès en écriture à la ressource est protégé par un sémaphore en exclusion mutuelle
+ * 
+ * @note le nombre de places est décidé au hasard entre 16 et 30
+ * un indicateur de fin de tableau est signifié par tous les bits de la structure à 0
+ */
+void populateResource()
 {
+    //accès en écriture sur la ressource partagée => on protège par sémaphores
     struct sembuf operations[1];
 
     // prélude
-    operations[0].sem_num = 0;
-    operations[0].sem_op = -1; // P()
+    operations[RESOURCE_SEM].sem_num = 0;
+    operations[RESOURCE_SEM].sem_op = -1; // Ressource.P()
     semop(semset_id, operations, 1);
 
-    // section critique
+    // Entrée en section critique
     // instanciation du tableau des spectacles
-    int i = 0;
-    while (SHOW_IDS[i] != NULL)
-    {
-        strncpy(shows[i].show_id, SHOW_IDS[i], SHOW_ID_LEN);
-        shows[i].nb_seats = 16 + rand() % 15;
-        i++;
-    }
-    memset(&shows[++i], 0, sizeof(Message));
+        int i = 0;
+        while (SHOW_IDS[i] != NULL)
+        {
+            strncpy(shows[i].show_id, SHOW_IDS[i], SHOW_ID_LEN);
+            shows[i].nb_seats = 16 + rand() % 15;
+            i++;
+        }
+        // terminaison du tableau
+        memset(&shows[++i], 0, sizeof(Message));
+    // Sortie de section critique
 
     // postlude
-    operations[0].sem_num = 0;
-    operations[0].sem_op = 1; // V()
+    operations[RESOURCE_SEM].sem_num = 0;
+    operations[RESOURCE_SEM].sem_op = 1; // Ressource.V()
     semop(semset_id, operations, 1);
-
 }
 
 int getNbShows()

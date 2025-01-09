@@ -267,8 +267,6 @@ int getUserRequest(Message *msg)
             fprintf(stderr, "Saisie non valide.\n");
         }
     }
-    printf("userRequest fini");
-    fflush(stdout);
     return request_type;
 }
 

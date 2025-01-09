@@ -28,8 +28,8 @@ echo "Succes de la compilation."
 
 # Lancement du server
 echo "Lancement du serveur..."
-./$SERVER_OUT
+./$SERVER_OUT &
 sleep 1 # Delai pour l'init des serveurs
 
 echo "Lancement du client..."
-./$CLIENT_OUT 
+gnome-terminal -- ./$CLIENT_OUT

@@ -45,12 +45,19 @@
 #include <errno.h>
 
 // CONSTANTES
+#define NB_WORKER_THREADS 6
+
 #define SERVER_IP "localhost" //devrait fonctionner pareil en IPV4 ou V6
 #define SERVER_PORT "49152" // premier port de la plage privée
 #define CLIENT_PORT "49153"
 
 #define KEY_FILENAME "NSY"
 #define KEY_ID 103
+
+#define NB_READERS_MUTEX 0 // indexes des semaphores dans la table
+#define QUEUE_SEM 1 
+#define RESOURCE_SEM 2
+
 
 // Tableau des noms de spectacles (6 caractères exactement)
 static const char *const SHOW_IDS[] = {

@@ -148,10 +148,10 @@ void initClient() {
 
     // Génération de la clé pour la message queue
     key_t key = ftok(KEY_FILENAME, KEY_ID);
-    if (key == -1) {
+    /*if (key == -1) {
         perror("Echec creation de la clef.\n");
         exit(EXIT_FAILURE);
-    }
+    }*/
 
     // Initialisation de la file de messages avec la clef générée
     setupMsgQueue(key);
