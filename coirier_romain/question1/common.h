@@ -81,6 +81,10 @@ typedef struct {
     signed char nb_seats; // -1,  0 ou nb places demandées / réservées
 } Message;
 
+typedef struct {
+    long msg; // 6 char + \0
+    signed char nb_seats; // -1,  0 ou nb places demandées / réservées
+} Job;
 //prototypes de fonctions
 
 

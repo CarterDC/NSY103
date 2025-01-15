@@ -24,6 +24,7 @@
 #include <time.h> // uniquement pour la génération aléatoire de nb de places
 
 // variables globales
+char *process_name; // pour identifier les 2 serveurs dans le terminal
 int msg_queue_id; // l'identifiant de la file de messages System V
 int sharedmem_id; // l'identifiant du segment de mémoire partagé
 int semset_id;    // l'identifiant du tableau des sméphores System V
@@ -38,7 +39,7 @@ void setupSharedMem(key_t key);
 void populateResource();
 int getNbShows();
 void setupMsgQueue(key_t key);
-void initServer();
+void initServer(key_t key);
 
 void getNbSeats(Message *msg); // consultation
 void bookSeats(Message *msg);  // réservation
@@ -54,18 +55,30 @@ int main(void)
     Request msg_req;
     Response msg_resp;
 
-    // mise en place du segment partagé, du sémaphore binaire et de la msgQueue
-    initServer();
+    // Génération de la clé pour la mémoire partagée et le sémaphore
+    key_t key = ftok(KEY_FILENAME, KEY_ID);
+    /*if (key == -1) {
+        perror("Echec creation de la clef.\n");
+        exit(EXIT_FAILURE);
+    }*/
 
+    // mise en place du segment partagé, du sémaphore binaire et de la msgQueue
+    
     // séparation du serveur en 2 processus lourds
     pid = fork();
     if (pid == 0)
     {
+        process_name = "Serveur de consultation";
+        // mise en place / récupération du segment de mémoire partagé
+        //setupSharedMem(key);
+        initServer(key);
+
+
         // processus fils en charge des consultations (mode séquentiel)
         while (1)
         {
             // on se met en attente d'un message de type REQUEST_CONSULT
-            printf("Serveur de consultation en attente de requetes...\n");
+            printf("%s : en attente de requetes...\n", process_name);
             if ((return_value = msgrcv(msg_queue_id, &msg_req,
              sizeof(Request) - sizeof(long), REQUEST_CONSULT, 0)) == -1)
             {
@@ -78,7 +91,7 @@ int main(void)
             msg_resp.msg_type = msg_req.pid; //pid du client pour récupération par le process adéquat
             strncpy(msg_resp.msg.show_id, msg_req.msg.show_id, SHOW_ID_LEN);
             getNbSeats(&msg_resp.msg);
-            // envoi de la réponse
+            // envoi de la réponseprintf("section critique");
             if ((return_value = msgsnd(msg_queue_id, &msg_resp,
              sizeof(Response) - sizeof(long), 0)) == -1)
             {
@@ -89,8 +102,13 @@ int main(void)
     }
     else
     {
+        process_name = "Serveur de reservation";
+        // mise en place / récupération du segment de mémoire partagé
+        //setupSharedMem(key);
+        initServer(key);
+
         // process père en charge des réservations
-        printf("Serveur de reservation en attente de requetes...\n");
+        printf("%s : en attente de requetes...\n", process_name);
         while (1)
         {
             // on se met en attente d'un message de type REQUEST_RESA
@@ -114,9 +132,7 @@ int main(void)
                     perror("Echec msgsnd.\n");
                     exit(EXIT_FAILURE);
                 }
-                // le process fils a traité la requete, il se termine proprement
-                printf("Détachement du segment de mémoire partagé.\n");
-                shmdt(shows);
+
                 exit(EXIT_SUCCESS);
             }
             // le process père continue d'attendre des requetes dans la queue.
@@ -129,16 +145,16 @@ void sigint_handler(int sig)
 {
 
     printf("\n");
-    printf("Fermeture de la queue.\n");
+    printf("%s : Suppression de la queue.\n", process_name);
     msgctl(msg_queue_id, IPC_RMID, NULL);
-    printf("Suppression du semaphore.\n");
+    printf("%s : Suppression du semaphore.\n", process_name);
     semctl(semset_id, 0, IPC_RMID, 0);
-    printf("Détachement du segment de mémoire partagé.\n");
+    printf("%s : Détachement du segment de mémoire partagé.\n", process_name);
     shmdt(shows);
-    printf("Suppression du segment partagé.\n");
+    printf("%s : Suppression du segment partagé.\n", process_name);
     shmctl(sharedmem_id, IPC_RMID, NULL);
 
-    printf("Au revoir.\n");
+    printf("%s : Au revoir.\n", process_name);
     exit(EXIT_SUCCESS);
 }
 
@@ -159,19 +175,12 @@ void setupSignalHandlers()
     signal(SIGCHLD, SIG_IGN);
 }
 
-void initServer()
+void initServer(key_t key)
 {
     srand(time(NULL)); // reset de la seed pour le nb de places aléatoire
 
     // mise en place du handler d'interruption de l'exécution
     setupSignalHandlers();
-
-    // Génération de la clé pour la mémoire partagée et le sémaphore
-    key_t key = ftok(KEY_FILENAME, KEY_ID);
-    /*if (key == -1) {
-        perror("Echec creation de la clef.\n");
-        exit(EXIT_FAILURE);
-    }*/
 
     // mise en place du tableau des sémaphores
     setupSemaphoreSet(key);
@@ -183,7 +192,7 @@ void initServer()
     setupMsgQueue(key);
 
     setbuf(stdout, NULL);
-    printf("'Ctrl + c' pour mettre fin aux programmes.\n");
+    printf("%s : 'Ctrl + c' pour mettre fin au programme.\n", process_name);
 }
 
 void setupSemaphoreSet(key_t key) {
@@ -194,6 +203,7 @@ void setupSemaphoreSet(key_t key) {
         {
             //le tableau de semaphore existe déjà, on le récupère
             semset_id = semget(key, 1, 0666);
+            printf("%s : Tableau de semaphores recupere.\n", process_name);
         }
         else
         {
@@ -201,6 +211,8 @@ void setupSemaphoreSet(key_t key) {
             fprintf(stderr, "Erreur %d : %s\n", errno, strerror(errno));
             exit(EXIT_FAILURE);
         }
+    } else {
+        printf("%s : Tableau de semaphores cree.\n", process_name);
     }    
     // Initialisation du semaphore (index 0, valeur d'init : 1)
     semctl(semset_id, 0, SETVAL, 1);
@@ -215,11 +227,12 @@ void setupSharedMem(key_t key)
     // récupération du segment de mémoire partagée
     if ((sharedmem_id = shmget(key, shm_size, 0666)) == -1)
     {
-        
+        //echec de la récupération,
+        // peut être que le segment n'est pas encore créé        
         if (errno == ENOENT)
         {
             // le segment n'existe pas encore, => on le crée
-            printf("Creation du segment de memoire partage.\n");
+            printf("%s : Creation du segment de memoire partage.\n", process_name);
             sharedmem_id = shmget(key, shm_size, 0666 | IPC_CREAT);
             // attachement du segment créé à l'espace d'adressage du process
             if ((shows = (Message *)shmat(sharedmem_id, NULL, 0)) == (Message *)-1)
@@ -232,14 +245,21 @@ void setupSharedMem(key_t key)
         }
         else
         {
-            perror("Erreur creation du segment de memoire partage.\n");
+            //autre erreur de récupération
+            perror("Erreur recuperation du segment de memoire partage.\n");
             fprintf(stderr, "Erreur %d : %s\n", errno, strerror(errno));
             exit(EXIT_FAILURE);
         }
     }
     else
     {
-        printf("Recuperation du segment de memoire partage.\n");
+        printf("%s : Segment de memoire partage recupere.\n", process_name);
+        // attachement du segment créé à l'espace d'adressage du process
+        if ((shows = (Message *)shmat(sharedmem_id, NULL, 0)) == (Message *)-1)
+        {
+            perror("Erreur lors de l attachement a la memoire partagee");
+            exit(EXIT_FAILURE);
+        }
     }
 }
 
@@ -253,6 +273,7 @@ void setupSharedMem(key_t key)
  */
 void populateResource()
 {
+    printf("%s : Remplissage de la ressource.\n", process_name);
     //accès en écriture sur la ressource partagée => on protège par sémaphores
     struct sembuf operations[1];
 
@@ -263,6 +284,7 @@ void populateResource()
 
     // Entrée en section critique
     // instanciation du tableau des spectacles
+    
         int i = 0;
         while (SHOW_IDS[i] != NULL)
         {

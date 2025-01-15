@@ -34,12 +34,13 @@ coirier_romain\ : Racine du Projet
 |  |-common.h : 
 |  |-client.c : 
 |  |-server.c : 
+|  |-compile_and_run.sh : script bash pour compiler et lancer les 2 executables
 |
 |-question2\ : Résolution du projet avec utilisation de processus lourds
 |  |-common.h : 
 |  |-client.c : 
 |  |-server.c :
-|  |-compile_and_run.sh : script bash pour compiler et lancer les 3 executables
+|  |-compile_and_run.sh : script bash pour compiler et lancer les 2 executables
 |
 |-rapport.pdf : Rapport explicatif du projet
 |

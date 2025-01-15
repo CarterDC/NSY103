@@ -2,7 +2,7 @@
  * @file server_consult.c
  * @brief Implémentation du serveur de consultation de la question 1.
  * @author Romain COIRIER
- * @date 08/01/2025
+ * @date 09/01/2025
  * @version 1.0
  * 
  * cf common.h
@@ -23,6 +23,7 @@
 // variables globales
 int listen_sock_fd; //descripteur du socket d'écoute TCP
 int semset_id; // l'identifiant du tableau des sméphores System V
+int jobs_queue_id; //identifiant de la message queue des travaux (requetes)
 Message *shows; // pointeur vers le futur tableau partagé
 int thread_ids[NB_WORKER_THREADS]; // de 1 à 6
 pthread_t threads[NB_WORKER_THREADS]; // tableau des worker threads
@@ -33,6 +34,7 @@ void sigint_handler(int sig);
 
 void setupSignalHandlers();
 void setupSemaphoreSet(key_t key);
+void setupMsgQueue(key_t key);
 void populateResource();
 int getNbShows();
 void setupListeningSocket();
@@ -55,7 +57,7 @@ int main(void){
     printf("Serveur.\n");
     printf("===========================\n");
 
-    int service_sock_fd, nb_bytes;
+    int service_sock_fd, return_value;
     struct sockaddr client_addr; // adresse du client 
     int addr_len = sizeof(client_addr);
     Message s2c_buf, c2s_buf; //structs des messages server vers client et retour
@@ -70,6 +72,15 @@ int main(void){
     while(1) {
         //créa d'une socket de service à l'acceptation de la connexion
         service_sock_fd = accept(listen_sock_fd, &client_addr, &addr_len);
+
+        //envoi du descripteur du socket de service via la file de message
+        // pour traitement par le premier thread disppo
+        if ((return_value = msgsnd(jobs_queue_id, &msg_resp,
+            sizeof(Response) - sizeof(long), 0)) == -1)
+        {
+        perror("Echec msgsnd.\n");
+        exit(EXIT_FAILURE);
+        }
         
         // traitement séquentiel de la requête avant d'accepter une nouvelle connexion
         // réception de la requête
@@ -92,6 +103,9 @@ void sigint_handler(int sig) {
     printf("\n");
     printf("Fermeture du socket.\n");
     close(listen_sock_fd);
+
+    printf("Suppression de la queue.\n");
+    msgctl(jobs_queue_id, IPC_RMID, NULL);
 
     //demande d'arrêt des threads
     stop_threads = true;
@@ -152,7 +166,6 @@ void initServer()
     setupListeningSocket();
 
     //création de NB_WORKER_THREADS worker threads pour gérer les requetes
-
     for(int i = 0; i<NB_WORKER_THREADS; i++) {
         thread_ids[i] = i + 1; // threads numérotés en base 1 
         if (pthread_create(&threads[i], NULL, workerThread, (void *)&thread_ids[i] ) != 0) { 
@@ -182,6 +195,24 @@ void setupSemaphoreSet(key_t key) {
     semctl(semset_id, NB_READERS_MUTEX, SETVAL, 1); //protection de nb_readers en exclusion mutuelle
     semctl(semset_id, QUEUE_SEM, SETVAL, 1); //queue de service pour l'équité d'accès
     semctl(semset_id, RESOURCE_SEM, SETVAL, 1); //protection de la resource partagée (shows[])
+}
+
+void setupMsgQueue(key_t key)
+{
+    jobs_queue_id = msgget(key, 0666 | IPC_CREAT | IPC_EXCL);
+    if (jobs_queue_id == -1)
+    {
+        if (errno == EEXIST)
+        {
+            jobs_queue_id = msgget(key, 0666);
+        }
+        else
+        {
+            perror("Echec creation de la message queue.\n");
+            fprintf(stderr, "Erreur %d : %s\n", errno, strerror(errno));
+            exit(EXIT_FAILURE);
+        }
+    }
 }
 
 /**

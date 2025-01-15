@@ -65,7 +65,7 @@ typedef enum {
 #define SHOW_ID_LEN 7 //  
 typedef struct {
     char show_id[SHOW_ID_LEN]; // 6 char + \0
-    signed char nb_seats; // -1,  0 ou nb places demandées / réservées
+    signed char nb_seats; // nb places demandées / réservées / restantes
 } Message;
 
 typedef struct { 
