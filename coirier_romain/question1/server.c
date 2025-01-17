@@ -23,31 +23,50 @@
 // variables globales
 int listen_sock_fd; //descripteur du socket d'écoute TCP
 int semset_id; // l'identifiant du tableau des sméphores System V
-int jobs_queue_id; //identifiant de la message queue des travaux (requetes)
+int nb_readers; // nb de lecteurs qui accèdent notre tableau à un instant t
+
 Message *shows; // pointeur vers le futur tableau partagé
-int thread_ids[NB_WORKER_THREADS]; // de 1 à 6
-pthread_t threads[NB_WORKER_THREADS]; // tableau des worker threads
-bool stop_threads; //
 
 //Prototypes
 void sigint_handler(int sig);
 
 void setupSignalHandlers();
 void setupSemaphoreSet(key_t key);
-void setupMsgQueue(key_t key);
 void populateResource();
 int getNbShows();
 void setupListeningSocket();
 void initServer();
 
+void bookSeats(Message *msg);
 void getNbSeats(Message *msg);
 
 void* workerThread(void* arg) {
-    int thread_id = *(int*)arg;
-    printf("Demarrage thread N%d.\n", thread_id);
-    while(!stop_threads){
+    int service_sock_fd = *(int*)arg;
+    int nb_bytes;
+    Message s2c_buf, c2s_buf; //structs des messages server vers client et retour
 
+    printf("Demarrage thread.\n");
+    // attente de la requete de la requête
+    nb_bytes = recv(service_sock_fd, &c2s_buf, sizeof(c2s_buf),0); //TODO check nb_bytes ? 
+    
+    //préparationde la réponse
+    strncpy(s2c_buf.show_id, c2s_buf.show_id, SHOW_ID_LEN);
+    if (c2s_buf.nb_seats == 0) {
+        //requete de consult
+        printf("Requete de Consultation pour le spectacle %s.\n", c2s_buf.show_id);
+        getNbSeats(&s2c_buf);
+    } else {
+        //requete de résa
+        printf("Requete de Reservation de %d places pour le spectacle %s.\n", c2s_buf.nb_seats, c2s_buf.show_id);
+        s2c_buf.nb_seats = c2s_buf.nb_seats;
+        bookSeats(&s2c_buf);
     }
+    //renvoi de la réponse 
+    nb_bytes = send(service_sock_fd, &s2c_buf, sizeof(s2c_buf),0); //TODO check nb_bytes ? 
+
+    printf("Fermeture socket de service.\n");
+    close(service_sock_fd);
+
     pthread_exit(NULL);
 }
 
@@ -57,11 +76,10 @@ int main(void){
     printf("Serveur.\n");
     printf("===========================\n");
 
-    int service_sock_fd, return_value;
+    int return_value;
     struct sockaddr client_addr; // adresse du client 
     int addr_len = sizeof(client_addr);
-    Message s2c_buf, c2s_buf; //structs des messages server vers client et retour
-
+    
     //mise en place des sémaphores, de la ressource paratgée et du socket d'écoute
     //mise en palce de la message queue et des threads
     initServer();
@@ -70,30 +88,12 @@ int main(void){
     printf("Serveur en attente de requetes reservation ou consultation...\n");
 
     while(1) {
-        //créa d'une socket de service à l'acceptation de la connexion
-        service_sock_fd = accept(listen_sock_fd, &client_addr, &addr_len);
-
-        //envoi du descripteur du socket de service via la file de message
-        // pour traitement par le premier thread disppo
-        if ((return_value = msgsnd(jobs_queue_id, &msg_resp,
-            sizeof(Response) - sizeof(long), 0)) == -1)
-        {
-        perror("Echec msgsnd.\n");
-        exit(EXIT_FAILURE);
-        }
-        
-        // traitement séquentiel de la requête avant d'accepter une nouvelle connexion
-        // réception de la requête
-        nb_bytes = recv(service_sock_fd, &c2s_buf, sizeof(c2s_buf),0); //TODO check nb_bytes ? 
-        printf("SC : Requete de Consultation pour le spectacle %s.\n", c2s_buf.show_id);
-        
-        strncpy(s2c_buf.show_id, c2s_buf.show_id, SHOW_ID_LEN);
-        getNbSeats(&s2c_buf);
-        //renvoie nb de places pour le spectacle
-        nb_bytes = send(service_sock_fd, &s2c_buf, sizeof(s2c_buf),0); //TODO check nb_bytes ? 
-
-        //traitement terminé on retourne en attente d'acceptation de connexion
-        close(service_sock_fd);
+        //créa d'un socket de service à l'acceptation de la connexion
+        int service_sock_fd = accept(listen_sock_fd, &client_addr, &addr_len);
+   
+        pthread_t thread;
+        pthread_create(&thread, NULL, workerThread,(void *)&service_sock_fd);
+        pthread_detach(thread); 
     }
 }
 
@@ -103,20 +103,6 @@ void sigint_handler(int sig) {
     printf("\n");
     printf("Fermeture du socket.\n");
     close(listen_sock_fd);
-
-    printf("Suppression de la queue.\n");
-    msgctl(jobs_queue_id, IPC_RMID, NULL);
-
-    //demande d'arrêt des threads
-    stop_threads = true;
-    //attente de l'arret des threads
-    for(int i = 0; i<NB_WORKER_THREADS; i++) {
-        if (pthread_join(threads[i], NULL) != 0) { 
-            perror("Echec synchro thread.\n"); 
-            exit(EXIT_FAILURE);
-        }
-        printf("Arret thread N%d.\n", i+1); 
-    }
 
     printf("Suppression du semaphore.\n");
     semctl(semset_id, 0, IPC_RMID, 0);
@@ -165,14 +151,6 @@ void initServer()
     //mise en place du socket
     setupListeningSocket();
 
-    //création de NB_WORKER_THREADS worker threads pour gérer les requetes
-    for(int i = 0; i<NB_WORKER_THREADS; i++) {
-        thread_ids[i] = i + 1; // threads numérotés en base 1 
-        if (pthread_create(&threads[i], NULL, workerThread, (void *)&thread_ids[i] ) != 0) { 
-            perror("Echec creation thread.\n"); 
-            exit(EXIT_FAILURE);
-        } 
-    }
 }
 
 void setupSemaphoreSet(key_t key) {
@@ -195,24 +173,6 @@ void setupSemaphoreSet(key_t key) {
     semctl(semset_id, NB_READERS_MUTEX, SETVAL, 1); //protection de nb_readers en exclusion mutuelle
     semctl(semset_id, QUEUE_SEM, SETVAL, 1); //queue de service pour l'équité d'accès
     semctl(semset_id, RESOURCE_SEM, SETVAL, 1); //protection de la resource partagée (shows[])
-}
-
-void setupMsgQueue(key_t key)
-{
-    jobs_queue_id = msgget(key, 0666 | IPC_CREAT | IPC_EXCL);
-    if (jobs_queue_id == -1)
-    {
-        if (errno == EEXIST)
-        {
-            jobs_queue_id = msgget(key, 0666);
-        }
-        else
-        {
-            perror("Echec creation de la message queue.\n");
-            fprintf(stderr, "Erreur %d : %s\n", errno, strerror(errno));
-            exit(EXIT_FAILURE);
-        }
-    }
 }
 
 /**
@@ -298,7 +258,7 @@ void setupListeningSocket() {
 }
 
 void getNbSeats(Message *msg) {
-    struct sembuf operations[1];
+    struct sembuf operations[2];
     // recherche de l'index du spectacle
     bool found = false;
     int i = -1;
@@ -312,17 +272,97 @@ void getNbSeats(Message *msg) {
         return;
     }
     
-    //accès en lecture au segment partagé
+    //accès en écriture sur la ressource partagée => on protège par sémaphores
 
-    //prélude
-    operations[0].sem_num = 0;
-    operations[0].sem_op = -1; //P()
+    // prélude
+    operations[0].sem_num = QUEUE_SEM;
+    operations[0].sem_op = -1; // ServiceQueue.P()
+    operations[1].sem_num = NB_READERS_MUTEX;
+    operations[1].sem_op = -1; // nb_readers.P()
+    semop(semset_id, operations, 2);
+        //mini section critique
+        nb_readers++;
+        if(nb_readers == 1) {
+            //on est le premier lecteur sur la ressource
+            operations[0].sem_num = RESOURCE_SEM;
+            operations[0].sem_op = -1; // Ressource.P()
+            semop(semset_id, operations, 1);        
+        }
+    operations[0].sem_num = QUEUE_SEM;
+    operations[0].sem_op = 1; // ServiceQueue.V()
+    operations[1].sem_num = NB_READERS_MUTEX;
+    operations[1].sem_op = 1; // nb_readers.V()
+    semop(semset_id, operations, 2);
+
+    // Entrée en section critique
+
+        msg->nb_seats = shows[i].nb_seats;
+
+    // Sortie de section critique
+
+    // postlude
+    operations[0].sem_num = NB_READERS_MUTEX;
+    operations[0].sem_op = -1; // nb_readers.P()
     semop(semset_id, operations, 1);
-    //section critique
-    msg->nb_seats = shows[i].nb_seats;
-    //postlude
-    operations[0].sem_num = 0;
-    operations[0].sem_op = 1; //V()
-    semop(semset_id, operations, 1);    
-    return;
+        //mini section critique
+        nb_readers--;
+        if(nb_readers == 0) {
+            //on était le dernier lecteur sur la ressource
+            operations[0].sem_num = RESOURCE_SEM;
+            operations[0].sem_op = 1; // Ressource.V()
+            semop(semset_id, operations, 1);       
+        }
+    operations[0].sem_num = NB_READERS_MUTEX;
+    operations[0].sem_op = 1; // nb_readers.V()
+    semop(semset_id, operations, 1);
 }
+
+void bookSeats(Message *msg)
+{
+    struct sembuf operations[3];
+    // recherche de l'index du spectacle
+    bool found = false;
+    int i = -1;
+    while (!found && (shows[++i].show_id[0] != '\0'))
+    {
+        found = strcmp(msg->show_id, shows[i].show_id) == 0;
+    }
+    if (!found)
+    {
+        // le spectacle demandé n'a pas été trouvé dans la liste
+        // on met tous les bits du message à 0 pour le signifier
+        memset(msg, 0, sizeof(Message));
+        return;
+    }
+
+    //accès en écriture sur la ressource partagée => on protège par sémaphores
+
+    // prélude
+    operations[0].sem_num = QUEUE_SEM;
+    operations[0].sem_op = -1; // ServiceQueue.P()
+    operations[1].sem_num = RESOURCE_SEM;
+    operations[1].sem_op = -1; // Ressource.P()
+    operations[2].sem_num = QUEUE_SEM;
+    operations[2].sem_op = 1; // ServiceQueue.V()
+    semop(semset_id, operations, 3);
+
+    // Entrée en section critique
+    if (msg->nb_seats <= shows[i].nb_seats)
+    {
+        // il reste assez de places
+        printf("Il reste %d et on demande %d", shows[i].nb_seats, msg->nb_seats);
+        shows[i].nb_seats = shows[i].nb_seats - msg->nb_seats;
+    }
+    else
+    {
+        // il ne reste pas assez de places pour honorer la réservation entière
+        msg->nb_seats = -1 * shows[i].nb_seats;
+    }
+    // Sortie de section critique
+
+    // postlude
+    operations[0].sem_num = RESOURCE_SEM;
+    operations[0].sem_op = 1; // Ressource.V()
+    semop(semset_id, operations, 1);
+}
+

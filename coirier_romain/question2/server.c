@@ -352,14 +352,14 @@ void getNbSeats(Message *msg)
     // accès en lecture au segment partagé
 
     // prélude
-    operations[0].sem_num = 0;
-    operations[0].sem_op = -1; // P()
+    operations[0].sem_num = RESOURCE_SEM;
+    operations[0].sem_op = -1; // ressource.P()
     semop(semset_id, operations, 1);
     // section critique
     msg->nb_seats = shows[i].nb_seats;
     // postlude
-    operations[0].sem_num = 0;
-    operations[0].sem_op = 1; // V()
+    operations[0].sem_num = RESOURCE_SEM;
+    operations[0].sem_op = 1; // ressource.V()
     semop(semset_id, operations, 1);
     return;
 }
@@ -385,8 +385,8 @@ void bookSeats(Message *msg)
     // accès en écriture au segment partagé
 
     // prélude
-    operations[0].sem_num = 0;
-    operations[0].sem_op = -1; // P()
+    operations[0].sem_num = RESOURCE_SEM;
+    operations[0].sem_op = -1; // ressource.P()
     semop(semset_id, operations, 1);
     // section critique
     if (msg->nb_seats <= shows[i].nb_seats)
@@ -400,8 +400,8 @@ void bookSeats(Message *msg)
         msg->nb_seats = -1 * shows[i].nb_seats;
     }
     // postlude
-    operations[0].sem_num = 0;
-    operations[0].sem_op = 1; // V()
+    operations[0].sem_num = RESOURCE_SEM;
+    operations[0].sem_op = 1; // ressource.V()
     semop(semset_id, operations, 1);
     return;
 }
