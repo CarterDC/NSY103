@@ -8,6 +8,7 @@
  * cf common.h
  * Ce serveur fork 1 process lourd fils pour gérer les consultations de façon séquentielle
  * Le père gère les réservation de façon parallèle en créant au autre fils pour chaque requête.
+ * L'initialisation du server se fait après le fork
  * Les requêtes sont extraites d'une file de messages
  *
  *
@@ -91,7 +92,7 @@ int main(void)
             msg_resp.msg_type = msg_req.pid; //pid du client pour récupération par le process adéquat
             strncpy(msg_resp.msg.show_id, msg_req.msg.show_id, SHOW_ID_LEN);
             getNbSeats(&msg_resp.msg);
-            // envoi de la réponseprintf("section critique");
+            // envoi de la réponse
             if ((return_value = msgsnd(msg_queue_id, &msg_resp,
              sizeof(Response) - sizeof(long), 0)) == -1)
             {
@@ -158,10 +159,20 @@ void sigint_handler(int sig)
     exit(EXIT_SUCCESS);
 }
 
+/**
+ * @brief Mets en place les handlers de signaux
+ * 
+ * Déclare un handler pour le signal d'interruption
+ *  et ignore le signal de mort des enfants
+ * 
+ * @note les enfants zombies seront gérés par le systeme d'exploitation
+ * (récupération des ressources etc..)
+ */
 void setupSignalHandlers()
 {
     // mise en place du handler d'interruption de l'exécution
     struct sigaction sa;
+    memset(&sa, 0, sizeof(sa));
     sa.sa_handler = sigint_handler;
     sa.sa_flags = 0;
     if (sigaction(SIGINT, &sa, NULL) == -1)
@@ -172,7 +183,14 @@ void setupSignalHandlers()
 
     // pas de handler pour sigchld :
     // les enfants zombis seront gérés par l'OS
-    signal(SIGCHLD, SIG_IGN);
+    memset(&sa, 0, sizeof(sa));
+    sa.sa_handler = SIG_IGN;
+    sa.sa_flags = 0;
+    if (sigaction(SIGCHLD, &sa, NULL) == -1)
+    {
+        perror("Erreur sigaction.\n");
+        exit(EXIT_FAILURE);
+    }
 }
 
 void initServer(key_t key)
@@ -202,17 +220,17 @@ void setupSemaphoreSet(key_t key) {
         if (errno == EEXIST)
         {
             //le tableau de semaphore existe déjà, on le récupère
-            semset_id = semget(key, 1, 0666);
-            printf("%s : Tableau de semaphores recupere.\n", process_name);
+            printf("%s : Recuperation du tableau des semaphores.\n", process_name);
+            semset_id = semget(key, 1, 0666);            
         }
         else
         {
-            perror("Echec creation du semaphore.\n");
+            perror("Creation du tableau des semaphores : Echec.\n");
             fprintf(stderr, "Erreur %d : %s\n", errno, strerror(errno));
             exit(EXIT_FAILURE);
         }
     } else {
-        printf("%s : Tableau de semaphores cree.\n", process_name);
+        printf("%s : Creation du tableau des semaphores : Succes.\n", process_name);
     }    
     // Initialisation du semaphore (index 0, valeur d'init : 1)
     semctl(semset_id, 0, SETVAL, 1);
@@ -302,6 +320,14 @@ void populateResource()
     semop(semset_id, operations, 1);
 }
 
+/**
+ * @brief Renvoie le nombre d'entrée du tableau des identifiants de spectacles
+ * défini dans le ficheir de header
+ * 
+ * note : On utilise NULL pour signifier la fin des entrées
+ *
+ * @return int : la longeur du tableau
+ */
 int getNbShows()
 {
     int i = 0;
@@ -309,25 +335,30 @@ int getNbShows()
     while (SHOW_IDS[i] != NULL)
     {
         i++;
-    } // et on multiple par la taille d'un message
+    }
     return i;
 }
 
-void setupMsgQueue(key_t key)
-{
+/**
+ * @brief Crée ou récupère une message Queue avec la clé passée en param.
+ *
+ * @param key La clé IPC utilisée pour identifier la file de messages.
+ */
+void setupMsgQueue(key_t key) {
+    // Tente de créer une file de message avec la clef donnée
     msg_queue_id = msgget(key, 0666 | IPC_CREAT | IPC_EXCL);
-    if (msg_queue_id == -1)
-    {
-        if (errno == EEXIST)
-        {
-            msg_queue_id = msgget(key, 0666);
-        }
-        else
-        {
-            perror("Echec creation de la message queue.\n");
+    if (msg_queue_id == -1) {
+        // Si la file de messages existe déjà (errno == EEXIST), tente de l'ouvrir
+        if (errno == EEXIST) {
+            printf("Recuperation de la file de messages.\n");
+            msg_queue_id = msgget(key, 0666);            
+        } else {
+            perror("Creation de la file de messages : Echec.\n");
             fprintf(stderr, "Erreur %d : %s\n", errno, strerror(errno));
             exit(EXIT_FAILURE);
         }
+    } else {
+        printf("Creation de la file de messages : Succes.\n");
     }
 }
 

@@ -21,8 +21,7 @@
 #include <time.h>
 
 // variables globales
-char *process_name; // pour identifier les 2 serveurs dans le terminal
-int msg_queue_id; // l'identifiant de la file de messages System V
+int listen_sock_fd; //descripteur du socket d'écoute TCP
 int semset_id; // l'identifiant du tableau des sméphores System V
 int nb_readers; // nb de lecteurs qui accèdent notre tableau à un instant t
 
@@ -35,50 +34,50 @@ void setupSignalHandlers();
 void setupSemaphoreSet(key_t key);
 void populateResource();
 int getNbShows();
-void setupMsgQueue(key_t key);
+void setupListeningSocket();
 void initServer();
 
 void bookSeats(Message *msg);
 void getNbSeats(Message *msg);
 
-void* consultation(void* arg) {
-    Request msg_req = *(Request*)arg; //on recaste l'argument dans une struct Requete
-    Response msg_resp;
-    int return_value;
+void* workerThread(void* arg) {
+    int service_sock_fd = *(int*)arg;
+    int nb_bytes;
+    Message s2c_buf, c2s_buf; //structs des messages server vers client et retour
 
-    printf("Demarrage thread consultation.\n");    
-    //préparation de la réponse
-    msg_resp.msg_type = msg_req.pid; //pid du client pour récupération par le process adéquat
-    strncpy(msg_resp.msg.show_id, msg_req.msg.show_id, SHOW_ID_LEN);
-    getNbSeats(&msg_resp.msg);
-    // envoi de la réponse
-    if ((return_value = msgsnd(msg_queue_id, &msg_resp,
-        sizeof(Response) - sizeof(long), 0)) == -1)
-    {
-        perror("Echec msgsnd.\n");
+    printf("Demarrage thread.\n");
+    // attente de la requete de la requête
+    if((nb_bytes = recv(service_sock_fd, &c2s_buf, sizeof(c2s_buf),0)) != sizeof(c2s_buf)){
+        // on a pas reçu le bon nb d'octets oubien il ya une erreur
+        perror("Erreur reception sur socket de service.\n");
+        printf("Fermeture socket de service.\n");
+        close(service_sock_fd);
         exit(EXIT_FAILURE);
     }
-
-    pthread_exit(NULL);
-}
-
-void* reservation(void* arg) {
-    Request msg_req = *(Request*)arg; //on recaste l'argument dans une struct Requete
-    Response msg_resp;
-    int return_value;
-
-    printf("Demarrage thread reservation.\n");    
-    //préparation de la réponse
-    msg_resp.msg_type = msg_req.pid;
-    msg_resp.msg = msg_req.msg;
-    bookSeats(&msg_resp.msg);
-    // envoi de la réponse
-    if ((return_value = msgsnd(msg_queue_id, &msg_resp, sizeof(Response) - sizeof(long), 0)) == -1)
-    {
-        perror("Echec msgsnd.\n");
-        exit(EXIT_FAILURE);
+    
+    // préparation de la réponse
+    strncpy(s2c_buf.show_id, c2s_buf.show_id, SHOW_ID_LEN);
+    if (c2s_buf.nb_seats == 0) {
+        //requete de consult
+        printf("Requete de Consultation pour le spectacle %s.\n", c2s_buf.show_id);
+        getNbSeats(&s2c_buf);
+    } else {
+        //requete de résa
+        printf("Requete de Reservation de %d places pour le spectacle %s.\n", c2s_buf.nb_seats, c2s_buf.show_id);
+        s2c_buf.nb_seats = c2s_buf.nb_seats;
+        bookSeats(&s2c_buf);
     }
 
+    // envoi de la réponse 
+    if((nb_bytes = send(service_sock_fd, &s2c_buf, sizeof(s2c_buf),0)) != sizeof(c2s_buf)){
+        // on a pas envoyé le bon nb d'octets oubien il ya une erreur
+        perror("Erreur envoi depuis socket de service.\n");
+        printf("Fermeture socket de service.\n");
+        close(service_sock_fd);
+        exit(EXIT_FAILURE);
+    }
+    printf("Fermeture socket de service.\n");
+    close(service_sock_fd);
     pthread_exit(NULL);
 }
 
@@ -89,34 +88,22 @@ int main(void){
     printf("===========================\n");
 
     int return_value;
-    Request msg_req;
+    struct sockaddr client_addr; // adresse du client 
+    int addr_len = sizeof(client_addr);
     
-    //mise en place des sémaphores, de la ressource paratgée et de la queue
+    //mise en place des sémaphores, de la ressource paratgée et du socket d'écoute
+    //mise en palce de la message queue et des threads
     initServer();
 
-    while(1) {
-        printf("Serveur en attente de requetes reservation ou consultation...\n");
-        // attente de la réception d'une requete
-        if ((return_value = msgrcv(msg_queue_id, &msg_req,
-            sizeof(Request) - sizeof(long), MESSAGE_TYPE, 0)) == -1)
-        {
-            perror("Echec msgrcv.\n");
-            exit(EXIT_FAILURE);
-        }
+    listen(listen_sock_fd, 10); // Queue de 10 demandes
+    printf("Serveur en attente de requetes reservation ou consultation...\n");
 
-        // création d'un thread spécifique pour traiter la requete client
+    while(1) {
+        //créa d'un socket de service à l'acceptation de la connexion
+        int service_sock_fd = accept(listen_sock_fd, &client_addr, &addr_len);
+   
         pthread_t thread;
-        if(msg_req.msg.nb_seats == 0) {
-            printf("Requete de Consultation pour le spectacle %s.\n",
-             msg_req.msg.show_id);
-            pthread_create(&thread, NULL, consultation,(void *)&msg_req);
-        } else {
-            printf("Requete de Reservation de %d places pour le spectacle %s.\n",
-             msg_req.msg.nb_seats, msg_req.msg.show_id);
-            pthread_create(&thread, NULL, reservation,(void *)&msg_req);
-        }
-        // on ne pourra pas resynchro avec le thread a l'aide d'un join
-        // donc on détache et on laisse le Système d'Exploitation gérer ça
+        pthread_create(&thread, NULL, workerThread,(void *)&service_sock_fd);
         pthread_detach(thread); 
     }
 }
@@ -125,11 +112,11 @@ int main(void){
 void sigint_handler(int sig) {
 
     printf("\n");
-    printf("Suppression de la file de messages.\n");
-    msgctl(msg_queue_id, IPC_RMID, NULL);
+    printf("Fermeture du socket.\n");
+    close(listen_sock_fd);
 
-    printf("Suppression des semaphores.\n");
-    semctl(semset_id, NB_READERS_MUTEX, IPC_RMID, 0); //suprimer 1 les supprime tous
+    printf("Suppression du semaphore.\n");
+    semctl(semset_id, 0, IPC_RMID, 0);
 
     printf("Liberation de la memoire.\n");
     free(shows);
@@ -138,16 +125,9 @@ void sigint_handler(int sig) {
     exit(EXIT_SUCCESS);
 }
 
-/**
- * @brief Mets en place les handlers de signaux
- * 
- * Déclare un handler pour le signal d'interruption
- * 
- */
 void setupSignalHandlers() {
     //mise en place du handler d'interruption de l'exécution
     struct sigaction sa;
-    memset(&sa, 0, sizeof(sa));
     sa.sa_handler = sigint_handler;
     sa.sa_flags = 0;
     if(sigaction(SIGINT, &sa, NULL) == -1) {
@@ -166,14 +146,21 @@ void initServer()
 
     // Génération de la clé pour le sémaphore
     key_t key = ftok(KEY_FILENAME, KEY_ID);
+    /*if (key == -1) {
+        perror("Echec creation de la clef.\n");
+        exit(EXIT_FAILURE);
+    }*/
+
     // mise en place du tableau des sémaphores
     setupSemaphoreSet(key);
-    // Création / récupération de la message queue
-    setupMsgQueue(key);
+    //mise en place d'une message queue pour déposer les requetes (les ids de service socket)
 
     //allocation et remplissage du tableau des spectacles
     shows = (Message *) malloc((getNbShows() + 1) * sizeof(Message));
     populateResource();
+
+    //mise en place du socket
+    setupListeningSocket();
 
 }
 
@@ -184,18 +171,15 @@ void setupSemaphoreSet(key_t key) {
         if (errno == EEXIST)
         {
             //le tableau de semaphore existe déjà, on le récupère
-            printf("Recuperation du tableau des semaphores.\n");
             semset_id = semget(key, 3, 0666);
         }
         else
         {
-            perror("Creation du tableau des semaphores : Echec.\n");
+            perror("Echec creation du semaphore.\n");
             fprintf(stderr, "Erreur %d : %s\n", errno, strerror(errno));
             exit(EXIT_FAILURE);
         }
-    } else {
-        printf("Creation du tableau des semaphores : Succes.\n");
-    }       
+    }    
     // Initialisation des semaphores (tous init à 1)
     semctl(semset_id, NB_READERS_MUTEX, SETVAL, 1); //protection de nb_readers en exclusion mutuelle
     semctl(semset_id, QUEUE_SEM, SETVAL, 1); //queue de service pour l'équité d'accès
@@ -213,7 +197,6 @@ void setupSemaphoreSet(key_t key) {
  */
 void populateResource()
 {
-    printf("Remplissage de la ressource.\n");
     //accès en écriture sur la ressource partagée => on protège par sémaphores
     struct sembuf operations[3];
 
@@ -246,45 +229,42 @@ void populateResource()
 }
 
 
-/**
- * @brief Renvoie le nombre d'entrée du tableau des identifiants de spectacles
- * défini dans le ficheir de header
- * 
- * note : On utilise NULL pour signifier la fin des entrées
- *
- * @return int : la longeur du tableau
- */
-int getNbShows()
-{
+int getNbShows() {
     int i = 0;
     // on compte la taille du tableau des noms de spectacles
-    while (SHOW_IDS[i] != NULL)
-    {
+    while(SHOW_IDS[i] != NULL) {
         i++;
-    }
+    }    // et on multiple par la taille d'un message
     return i;
 }
 
-/**
- * @brief Crée ou récupère une message Queue avec la clé passée en param.
- *
- * @param key La clé IPC utilisée pour identifier la file de messages.
- */
-void setupMsgQueue(key_t key) {
-    // Tente de créer une file de message avec la clef donnée
-    msg_queue_id = msgget(key, 0666 | IPC_CREAT | IPC_EXCL);
-    if (msg_queue_id == -1) {
-        // Si la file de messages existe déjà (errno == EEXIST), tente de l'ouvrir
-        if (errno == EEXIST) {
-            printf("Recuperation de la file de messages.\n");
-            msg_queue_id = msgget(key, 0666);            
-        } else {
-            perror("Creation de la file de messages : Echec.\n");
-            fprintf(stderr, "Erreur %d : %s\n", errno, strerror(errno));
-            exit(EXIT_FAILURE);
-        }
-    } else {
-        printf("Creation de la file de messages : Succes.\n");
+void setupListeningSocket() {
+   int return_value;
+    struct addrinfo hints, *server_info;
+
+    //création de l'address info du server (nous): server_info
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family = AF_UNSPEC; // utilise IPV4 ou IPV6
+    hints.ai_socktype = SOCK_STREAM; //TCP
+    if((return_value = getaddrinfo(SERVER_IP, SERVER_PORT, &hints, &server_info)) != 0) {
+        perror("Erreur creation adresse server \n");
+        exit(EXIT_FAILURE);
+    }
+
+    //création du socket et association à notre adresse .
+    listen_sock_fd = socket(server_info->ai_family, server_info->ai_socktype, server_info->ai_protocol);
+    if(listen_sock_fd == -1) {
+        perror("Erreur creation du socket d ecoute\n");
+        fprintf(stderr, "Erreur %d : %s\n", errno, strerror(errno));
+        exit(EXIT_FAILURE);
+    }
+
+    if((return_value = bind(listen_sock_fd, server_info->ai_addr, server_info->ai_addrlen)) != 0) {
+        perror("Erreur association du socket d ecoute\n");
+        fprintf(stderr, "Erreur %d : %s\n", errno, strerror(errno));
+        printf("Fermeture du socket.\n");
+        close(listen_sock_fd);
+        exit(EXIT_FAILURE);
     }
 }
 

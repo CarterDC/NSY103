@@ -1,14 +1,13 @@
 /*******************************************************************************
  * @file client.c
- * @brief Implémentation du programme client de la question 2.
+ * @brief Implémentation du programme client de la question 1.
  * @author Romain COIRIER
- * @date 05/01/2025
+ * @date 08/01/2025
  * @version 1.0
  * 
  * cf common.h
  * Envoie les requêtes de l'utilisateur (consultation ou réservation) au server,
- *  via une file de message.
- * Reçoit les réponses identifiée avec le PID du client sur la meme queue 
+ *  via socket TCP (avec connexion).
  * 
  * @note Ce client permet de faire de multiples requêtes à la suite 
  * 
@@ -17,63 +16,68 @@
 
 #include "common.h"
 
-//Variables globales
-int msg_queue_id; // l'identifiant de la file de messages System V
+// descripteur du socket en global pour fermeture hors de main()
+int sock_fd;
 
-//prototypes de fonctions
+// prototypes de fonctions
 void sigint_handler(int sig);
 
 void setupSignalHandlers();
-void setupMsgQueue(key_t key);
-void initClient();
+void setupSocket();
+void getServerAddrInfo(struct addrinfo **serv_info);
+void initClient(struct addrinfo *serv_info);
 
 int getUserRequest(Message *msg);
 void requestShowId(Message *msg);
 int getRequestType(Message *msg);
 void requestNbSeatsToBook(Message *msg);
 
-void displayResponse(Response msg_resp, Request msg_req);
+void displayResponse(Message msg_resp, Message msg_req, int rq_type);
 
 /**
  * main()
- *
- * Crée ou récupère une message queue pour envoyer et recevoir des messages
- * avec un server sur la meme machine locale.
+ * TODO !!
  * 
  */
-int main(void){
+int main(void)
+{
 
-    printf("PROJET NSY103 - QUESTION 2.\n");
+    printf("PROJET NSY103 - QUESTION 1.\n");
     printf("Client.\n");
     printf("===========================\n");
 
-    // variables
-    int return_value;
-    pid_t pid = getpid();
-    Request msg_req;
-    Response msg_resp;
+    //
+    int return_value, request_type, nb_bytes;
+    struct addrinfo *serv_info;
+    Message c2s_buf, s2c_buf; // structs des messages clients vers server et retour
 
-    initClient();
+    setupSignalHandlers();
+    getServerAddrInfo(&serv_info);
 
-    while(1) {
+    while (1)
+    {
+        // préparation du message en fonction des choix de l'utilisateur
+        request_type = getUserRequest(&c2s_buf) == REQUEST_CONSULT;
 
-        //préparation de le requete en fonction des choix de l'utilisateur
-        msg_req.msg_type = getUserRequest(&msg_req.msg);
-
-        //envoi de la requête
-        msg_req.pid = pid; //utilisé pour le type de la réponse
-        if((return_value = msgsnd(msg_queue_id, &msg_req, sizeof(Request) - sizeof(long), 0)) == -1) {
-            perror("Echec msgsnd.\n");
+        setupSocket();
+        // blocage en attendant la connexion au server
+        if ((return_value = connect(sock_fd, serv_info->ai_addr, serv_info->ai_addrlen)) != 0)
+        {
+            perror("Echec de connexion !\n");
+            fprintf(stderr, "Erreur %d : %s\n", errno, strerror(errno));
+            printf("Fermeture du socket.\n");
+            close(sock_fd);
             exit(EXIT_FAILURE);
         }
-
-        //attente de la réponse
-        if((return_value = msgrcv(msg_queue_id, &msg_resp, sizeof(Response) - sizeof(long), (long) pid, 0)) == -1) {
-            perror("Echec msgrcv.\n");
-            exit(EXIT_FAILURE);
-        }
-
-        displayResponse(msg_resp, msg_req);
+        // envoi de la requête
+        nb_bytes = send(sock_fd, &c2s_buf, sizeof(c2s_buf), 0);
+        // TODO vérif du nb_bytes envoyés
+        // attente de la réponse
+        nb_bytes = recv(sock_fd, &s2c_buf, sizeof(s2c_buf), 0); // TODO check nb_bytes ?
+        // TODO vérif du nb_bytes reçus
+        
+        displayResponse(s2c_buf, c2s_buf, request_type);
+        close(sock_fd);
     }
 }
 
@@ -84,13 +88,13 @@ int main(void){
  *
  * @param sig Le numéro du signal (non utilisé dans cette fonction).
  */
-void sigint_handler(int sig) {
-
+void sigint_handler(int sig)
+{
     printf("\n");
+    printf("Fermeture du socket.\n");
+    close(sock_fd);
 
-    // coté client, on ne ferme pas la messageQueue
-
-    // On met fin au programme
+    // on met fin au programme
     printf("Au revoir.\n");
     exit(EXIT_SUCCESS);
 }
@@ -103,7 +107,6 @@ void setupSignalHandlers() {
 
     // Mise en place du handler d'interruption de l'exécution
     struct sigaction sa;
-    memset(&sa, 0, sizeof(sa));
     sa.sa_handler = sigint_handler;
     sa.sa_flags = 0;
     if (sigaction(SIGINT, &sa, NULL) == -1) {
@@ -114,48 +117,85 @@ void setupSignalHandlers() {
     printf("'Ctrl + c' pour mettre fin au programme.\n");
 }
 
-
 /**
- * @brief Crée ou récupère une message Queue avec la clé passée en param.
- *
- * @param key La clé IPC utilisée pour identifier la file de messages.
+ * @brief TODO
  */
-void setupMsgQueue(key_t key) {
-    // Tente de créer une file de message avec la clef donnée
-    msg_queue_id = msgget(key, 0666 | IPC_CREAT | IPC_EXCL);
-    if (msg_queue_id == -1) {
-        // Si la file de messages existe déjà (errno == EEXIST), tente de l'ouvrir
-        if (errno == EEXIST) {
-            printf("Recuperation de la file de messages.\n");
-            msg_queue_id = msgget(key, 0666);            
-        } else {
-            perror("Creation de la file de messages : Echec.\n");
-            fprintf(stderr, "Erreur %d : %s\n", errno, strerror(errno));
-            exit(EXIT_FAILURE);
-        }
-    } else {
-        printf("Creation de la file de messages : Succes.\n");
+void setupSocket()
+{
+    int return_value;
+    struct addrinfo hints, *client_info;
+
+    // création de l'address info du client (nous): client_info
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family = AF_UNSPEC;     // utilise IPV4 ou IPV6
+    hints.ai_socktype = SOCK_STREAM; // TCP
+    hints.ai_flags = AI_PASSIVE;     // flag pour utiliser notre IP (client)
+    if ((return_value = getaddrinfo(NULL, CLIENT_PORT, &hints, &client_info)) != 0)
+    {
+        perror("Erreur creation adresse client\n");
+        exit(EXIT_FAILURE);
+    }
+
+    // création du socket et association à l'adresse (et port) du client.
+    sock_fd = socket(client_info->ai_family, client_info->ai_socktype, client_info->ai_protocol);
+    if (sock_fd == -1)
+    {
+        perror("Erreur creation du socket\n");
+        fprintf(stderr, "Erreur %d : %s\n", errno, strerror(errno));
+        exit(EXIT_FAILURE);
+    }
+
+    if ((return_value = bind(sock_fd, client_info->ai_addr, client_info->ai_addrlen)) != 0)
+    {
+        perror("Erreur association du socket\n");
+        fprintf(stderr, "Erreur %d : %s\n", errno, strerror(errno));
+        printf("Fermeture du socket.\n");
+        close(sock_fd);
+        exit(EXIT_FAILURE);
     }
 }
 
+/**
+ * @brief TODO
+ */
+void getServerAddrInfo(struct addrinfo **serv_info)
+{
+    int return_value;
+    struct addrinfo hints;
+    // création de l'address info du server de consultation ou réservation
+    memset(&hints, 0, sizeof(hints)); // remplissage avec des 0 avant de réutiliser hints
+    hints.ai_family = AF_UNSPEC;
+    hints.ai_socktype = SOCK_STREAM;
+    return_value = getaddrinfo(SERVER_IP, SERVER_PORT, &hints, serv_info);
+
+    if (return_value != 0)
+    {
+        perror("Erreur creation adresse serveur\n");
+        fprintf(stderr, "Erreur %d : %s\n", errno, strerror(errno));
+        printf("Fermeture du socket.\n");
+        close(sock_fd);
+        exit(EXIT_FAILURE);
+    }
+}
 
 /**
  * @brief Initialise le client.
  *
  * Configure les handlers de signaux
- * et initialise la file de messages.
+ * Crée le socket TCP et l'address info du server
  */
-void initClient() {
-    // Mise en place du handler d'interruption de l'exécution
+void initClient(struct addrinfo *serv_info)
+{
+    // mise en place du handler d'interruption de l'exécution
     setupSignalHandlers();
 
-    // Génération de la clé pour la message queue
-    key_t key = ftok(KEY_FILENAME, KEY_ID);
+    // mise en place du socket
+    setupSocket();
 
-    // Initialisation de la file de messages avec la clef générée
-    setupMsgQueue(key);
+    // création de l'address info du server adapté à la requête
+    getServerAddrInfo(&serv_info);
+
 }
-
 
 /**
  * @brief Affiche la réponse reçue du serveur en fonction du type de requête.
@@ -167,31 +207,30 @@ void initClient() {
  * @param msg_resp La réponse du serveur
  * @param msg_req La requête initiale de l'utilisateur
  */
-void displayResponse(Response msg_resp, Request msg_req) {
+void displayResponse(Message msg_resp, Message msg_req, int rq_type) {
     
     //si la structure est remplie de 0, le server indique que le show n'existe pas
-    if (msg_resp.msg.show_id[0] == '\0') {        
+    if (msg_resp.show_id[0] == '\0') {        
         printf("Le serveur indique que le spectacle %s n existe pas.\n\n",
-            msg_req.msg.show_id);
+            msg_req.show_id);
         return;
     }
 
-    if (msg_req.msg_type == REQUEST_CONSULT) {
+    if (rq_type == REQUEST_CONSULT) {
         // Requête de consultation
         printf("Il reste %d places libres pour le spectacle %s.\n\n", 
-            msg_resp.msg.nb_seats, msg_resp.msg.show_id);
+            msg_resp.nb_seats, msg_resp.show_id);
     } else {
         // Requête de réservation
-        if (msg_resp.msg.nb_seats > 0) {
+        if (msg_resp.nb_seats > 0) {
             printf("Reservation confirmee de %d places pour le spectacle %s.\n\n",
-                msg_resp.msg.nb_seats, msg_resp.msg.show_id);
+                msg_resp.nb_seats, msg_resp.show_id);
         } else {
             printf("Reservation impossible de %d places ; %d disponibles pour le spectacle %s.\n\n", 
-                msg_req.msg.nb_seats, -1 * msg_resp.msg.nb_seats, msg_resp.msg.show_id);
+                msg_req.nb_seats, -1 * msg_resp.nb_seats, msg_resp.show_id);
         }
     }
 }
-
 
 /**
  * @brief Rempli la structure de message à envoyer.
@@ -228,7 +267,6 @@ int getUserRequest(Message *msg)
             fprintf(stderr, "Saisie non valide.\n");
         }
     }
-
     return request_type;
 }
 

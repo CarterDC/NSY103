@@ -36,13 +36,21 @@
 //signaux
 #include <signal.h>
 
-//message queue
-#include <sys/msg.h>
+// Sockets & réseaux
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <netdb.h>
 
 // erreurs
 #include <errno.h>
 
 // CONSTANTES
+#define NB_WORKER_THREADS 6
+
+#define SERVER_IP "localhost" //devrait fonctionner pareil en IPV4 ou V6
+#define SERVER_PORT "49152" // premier port de la plage privée
+#define CLIENT_PORT "49153"
+
 #define KEY_FILENAME "NSY"
 #define KEY_ID 103
 
@@ -50,9 +58,6 @@
 #define QUEUE_SEM 1 
 #define RESOURCE_SEM 2
 
-#define MESSAGE_TYPE 1
-#define REQUEST_CONSULT 1 // requête en consultation
-#define REQUEST_RESA 2 // requête en réservation
 
 // Tableau des noms de spectacles (6 caractères exactement)
 static const char *const SHOW_IDS[] = {
@@ -62,6 +67,13 @@ static const char *const SHOW_IDS[] = {
     NULL // terminaison du tableau
 };
 
+// Types de requête
+typedef enum {
+    REQUEST_CONSULT = 1, // requête en consultation
+    REQUEST_RESA = 2 // requête en réservation
+} RequestType;
+
+
 // Structure des messages
 #define SHOW_ID_LEN 7 //  
 typedef struct {
@@ -69,17 +81,10 @@ typedef struct {
     signed char nb_seats; // -1,  0 ou nb places demandées / réservées
 } Message;
 
-typedef struct { 
-    long msg_type;
-    Message msg;
-    pid_t pid;
-} Request;
-
 typedef struct {
-    long msg_type;
-    Message msg;
-} Response;
-
+    long msg; // 6 char + \0
+    signed char nb_seats; // -1,  0 ou nb places demandées / réservées
+} Job;
 //prototypes de fonctions
 
 
