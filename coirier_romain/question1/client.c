@@ -53,6 +53,7 @@ int main(void){
     Request msg_req;
     Response msg_resp;
 
+    //mets en place le gestionnaire de signaux ainsi que la file de messages
     initClient();
 
     while(1) {

@@ -6,12 +6,15 @@
  * @version 1.0
  * 
  * cf common.h
- * Ce serveur accepte des connections (TCP) 
+ * Ce serveur extrait les requetes client d'une file de message. 
+ * suivant qu'il s'agissent d'une requete de consultation ou de réservation, 
+ * un thread est crée exécutant la fonction correspondante puis envoyant une réponse au client.  
  * 
+ * @note Plusieurs threads pouvant être concurrents en lecture ou en écriture sur 
+ * le tableau des spectacles (la ressource critique), on utilise ici un algo de synchronisation type lecteur rédacteur 
  * 
- * @note .
- * 
- * @bug .
+ * @bug :  * @bug : En cas d'erreurs, les ressources ne sont pas toujours libérées correctement,
+ * aussi il arrive de devoir relnacer le server et de le fermer avant de récupérer un fonctionnement normal.
  ******************************************************************************/
 
 #include "common.h"
@@ -20,13 +23,14 @@
 #include <sys/sem.h>
 #include <time.h>
 
+#include <syscall.h>
+
 // variables globales
-char *process_name; // pour identifier les 2 serveurs dans le terminal
 int msg_queue_id; // l'identifiant de la file de messages System V
 int semset_id; // l'identifiant du tableau des sméphores System V
 int nb_readers; // nb de lecteurs qui accèdent notre tableau à un instant t
 
-Message *shows; // pointeur vers le futur tableau partagé
+Message *shows; // pointeur vers le futur tableau (partagé nativement par tous les threads)
 
 //Prototypes
 void sigint_handler(int sig);
@@ -41,16 +45,30 @@ void initServer();
 void bookSeats(Message *msg);
 void getNbSeats(Message *msg);
 
+/**
+ * @brief thread de gestion des requetes de consultation
+ *
+ * Récupère le nombre de places libres pour le spectacle demandé
+ * Renvoie la réponse par la file de message (pid du client comme type)
+ * 
+ * @note la lecture du nombre de place de getNBSeats() se fait de façon synchronisée 
+ *  
+ * @param void* un pointeur déréférencé vers une structure de requete.
+ */
 void* consultation(void* arg) {
+    //affichage du thread id
+    char process_name[30];
+    sprintf(process_name, "Thread N %d", (int) syscall(SYS_gettid));
+    printf("%s : Demarrage thread de consultation.\n", process_name);
+
     Request msg_req = *(Request*)arg; //on recaste l'argument dans une struct Requete
     Response msg_resp;
     int return_value;
 
-    printf("Demarrage thread consultation.\n");    
     //préparation de la réponse
     msg_resp.msg_type = msg_req.pid; //pid du client pour récupération par le process adéquat
     strncpy(msg_resp.msg.show_id, msg_req.msg.show_id, SHOW_ID_LEN);
-    getNbSeats(&msg_resp.msg);
+    getNbSeats(&msg_resp.msg); // lecture du nb de palce de façon synchronisée
     // envoi de la réponse
     if ((return_value = msgsnd(msg_queue_id, &msg_resp,
         sizeof(Response) - sizeof(long), 0)) == -1)
@@ -62,12 +80,27 @@ void* consultation(void* arg) {
     pthread_exit(NULL);
 }
 
+/**
+ * @brief thread de gestion des requetes de réservation
+ *
+ * Réserver, si possible, un nb de places pour le spectacle demandé
+ * Renvoie la réponse par la file de message (pid du client comme type)
+ * 
+ * @note la vérification du nb de places restantes ainsi que
+ * la mise à jour de l'entrée (bookSeats()) se fait de façon synchronisée 
+ *  
+ * @param void* un pointeur déréférencé vers une structure de requete.
+ */
 void* reservation(void* arg) {
+    //affichage du thread id
+    char process_name[30];
+    sprintf(process_name, "Thread N %d", (int) syscall(SYS_gettid));
+    printf("%s : Demarrage thread de reservation.\n", process_name);
+
     Request msg_req = *(Request*)arg; //on recaste l'argument dans une struct Requete
     Response msg_resp;
     int return_value;
-
-    printf("Demarrage thread reservation.\n");    
+   
     //préparation de la réponse
     msg_resp.msg_type = msg_req.pid;
     msg_resp.msg = msg_req.msg;
@@ -82,6 +115,14 @@ void* reservation(void* arg) {
     pthread_exit(NULL);
 }
 
+/**
+ * @brief Gestion parallèle, avec des processus légers,
+ *  des requetes clients entrantes sur la message queue
+ *
+ * Un seul msg type est utilisé (1),
+ * les types de requetes sont différenciés par le nb de places demandées
+ * (0 == requête en consultation) cf common.h
+ */
 int main(void){
 
     printf("PROJET NSY103 - QUESTION 1.\n");
@@ -91,7 +132,7 @@ int main(void){
     int return_value;
     Request msg_req;
     
-    //mise en place des sémaphores, de la ressource paratgée et de la queue
+    //mise en place des sémaphores, de la queue et de la ressource (tableau des spectacles)
     initServer();
 
     while(1) {
@@ -121,7 +162,13 @@ int main(void){
     }
 }
 
-// handler pour signal SIGINT
+/**
+ * @brief Gère le signal d'interruption (SIGINT) pour terminer proprement le programme.
+ *
+ * Libère les ressources : file de message, semaphores, mémoire allouée à notre ressource
+ *
+ * @param sig Le numéro du signal (non utilisé dans cette fonction).
+ */
 void sigint_handler(int sig) {
 
     printf("\n");
@@ -157,6 +204,13 @@ void setupSignalHandlers() {
     printf("'Ctrl + c' pour mettre fin au programme.\n");
 }
 
+/**
+ * @brief Initialise un server (appelé par le server de consult ET le server de résa).
+ * 
+ * Configure les handlers de signaux, les 3 sémaphores,
+ * la file de messages et crée le tableau des données (ressource)
+ * 
+ */
 void initServer()
 {
     srand(time(NULL)); // reset de la seed pour le nb de places aléatoire
@@ -177,6 +231,17 @@ void initServer()
 
 }
 
+/**
+ * @brief Crée/récupère un tableau de 3 sémaphores et les initie à 1
+ * 
+ * Utilise la clef en paragmètre pour identifier le sémaphore.
+ * Si la tentative de création échoue, alors on tente une récupération
+ * 
+ * Les 3 sémaphores interviennent dans l'algo de synchro
+ * pour la protection de la ressource critique (variante de lecteur/rédacteur)
+ * 
+ * @param key_t la clef identifiant l'outil IPC
+ */
 void setupSemaphoreSet(key_t key) {
     // Création ou récupération (si déjà créé) d'un tableau de 3 semaphores
     if ((semset_id = semget(key, 3, IPC_CREAT | IPC_EXCL | 0666)) == -1)
@@ -288,6 +353,16 @@ void setupMsgQueue(key_t key) {
     }
 }
 
+/**
+ * @brief retourne le nb de place d'un spectacle passé en paramètre
+ * 
+ * l'accès en lecture à la ressource est protégé par un algo de synchro 
+ * type lecteur rédacteur avec principe d'équité assuré par le sémaphore QUEUE_SEM
+ * 
+ * note : la partie recherche d'index est hors de la section critique
+ * 
+ * @param Message* un pointeur qui va recevoir le nb de places
+ */
 void getNbSeats(Message *msg) {
     struct sembuf operations[2];
     // recherche de l'index du spectacle
@@ -326,9 +401,7 @@ void getNbSeats(Message *msg) {
     semop(semset_id, operations, 2);
 
     // Entrée en section critique
-
         msg->nb_seats = shows[i].nb_seats;
-
     // Sortie de section critique
 
     // postlude
@@ -348,6 +421,19 @@ void getNbSeats(Message *msg) {
     semop(semset_id, operations, 1);
 }
 
+/**
+ * @brief Tente de Réserver le nb de place demandé pour le spectacle passé en paramètre
+ * 
+ * vérifie si la requete est possible (nb places restantes >= nb de places demandées)
+ * 
+ * l'accès en écriture à la ressource est protégé par un algo de synchro 
+ * type lecteur rédacteur avec principe d'équité assuré par le sémaphore QUEUE_SEM
+ * 
+ * note : la partie recherche d'index est hors de la section critique
+ * 
+ * @param Message* nb de places > 0 : réservation acceptée pour le nb_places
+ *                              <= 0 : réservation refusée nb de places restantes en négatif
+ */
 void bookSeats(Message *msg)
 {
     struct sembuf operations[3];
@@ -378,17 +464,16 @@ void bookSeats(Message *msg)
     semop(semset_id, operations, 3);
 
     // Entrée en section critique
-    if (msg->nb_seats <= shows[i].nb_seats)
-    {
-        // il reste assez de places
-        printf("Il reste %d et on demande %d", shows[i].nb_seats, msg->nb_seats);
-        shows[i].nb_seats = shows[i].nb_seats - msg->nb_seats;
-    }
-    else
-    {
-        // il ne reste pas assez de places pour honorer la réservation entière
-        msg->nb_seats = -1 * shows[i].nb_seats;
-    }
+        if (msg->nb_seats <= shows[i].nb_seats)
+        {
+            // il reste assez de places
+            shows[i].nb_seats = shows[i].nb_seats - msg->nb_seats;
+        }
+        else
+        {
+            // il ne reste pas assez de places pour honorer la réservation entière
+            msg->nb_seats = -1 * shows[i].nb_seats;
+        }
     // Sortie de section critique
 
     // postlude
@@ -396,4 +481,3 @@ void bookSeats(Message *msg)
     operations[0].sem_op = 1; // Ressource.V()
     semop(semset_id, operations, 1);
 }
-

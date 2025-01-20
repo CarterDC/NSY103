@@ -9,14 +9,14 @@
  * et servers : 
  * -> spectacle_id : char[7] (6 caractères + terminaison \0)
  * -> nb_places : signed char (-128 à 127)
- * pour une taille totale de 64 bits (TODO : à vérifier).
+ * pour une taille totale de 64 bits.
  * 
  * @note le champ nb_places est utilisé pour la communication client server : 
  *     0 demande de consultation.
  *     > 0 en consultation : réponse ; en réservation : demande / accusé
  *     < 0 en réservation refus avec indication des places restantes
  * 
- * @bug oui ?.
+ * @bug .
  ******************************************************************************/
 
 //TODO créer un common.c avec les fonctions communes (ajouter les déclarations ici)

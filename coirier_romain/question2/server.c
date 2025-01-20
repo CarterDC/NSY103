@@ -12,10 +12,11 @@
  * Les requêtes sont extraites d'une file de messages
  *
  *
- * @note Chaque process fils accède au segment de mémoire partagée (table des spectacles)
- * en lecture ou écriture, selon les règles de synchronisation de l'exclusiion mutuelle.
+ * @note Chaque process fils attache individuellement le segment de mémoire partagée (table des spectacles)
+ * La ressource critique est alors accédée en lecture ou écriture, selon les règles de synchronisation de l'exclusiion mutuelle.
  *
- * @bug .
+ * @bug : En cas d'erreurs (exit(EXIT_FAILURE)), les ressources ne sont pas toujours libérées correctement,
+ * aussi il arrive de devoir relancer le server et de le fermer avant de récupérer un fonctionnement normal.
  ******************************************************************************/
 
 #include "common.h"
@@ -25,10 +26,10 @@
 #include <time.h> // uniquement pour la génération aléatoire de nb de places
 
 // variables globales
-char *process_name; // pour identifier les 2 serveurs dans le terminal
+char process_name[30]; // pour identifier les 2 serveurs dans le terminal
 int msg_queue_id; // l'identifiant de la file de messages System V
 int sharedmem_id; // l'identifiant du segment de mémoire partagé
-int semset_id;    // l'identifiant du tableau des sméphores System V
+int semset_id;    // l'identifiant du tableau de sémaphore System V
 Message *shows;   // pointeur vers le futur tableau partagé
 
 // Prototypes
@@ -45,6 +46,14 @@ void initServer(key_t key);
 void getNbSeats(Message *msg); // consultation
 void bookSeats(Message *msg);  // réservation
 
+/**
+ * @brief Crée deux process séparés, un serveur de consultation itératif et un 
+ * serveur de réservation parallèle
+ *
+ * Chaque serveur est initialisé séparément 
+ * et chaque process est attaché individuellement au segment de mémoire partagé 
+ *
+ */
 int main(void)
 {
     printf("PROJET NSY103 - QUESTION 2.\n");
@@ -58,24 +67,18 @@ int main(void)
 
     // Génération de la clé pour la mémoire partagée et le sémaphore
     key_t key = ftok(KEY_FILENAME, KEY_ID);
-    /*if (key == -1) {
-        perror("Echec creation de la clef.\n");
-        exit(EXIT_FAILURE);
-    }*/
 
-    // mise en place du segment partagé, du sémaphore binaire et de la msgQueue
-    
     // séparation du serveur en 2 processus lourds
     pid = fork();
     if (pid == 0)
     {
-        process_name = "Serveur de consultation";
-        // mise en place / récupération du segment de mémoire partagé
-        //setupSharedMem(key);
-        initServer(key);
-
-
         // processus fils en charge des consultations (mode séquentiel)
+        strcpy(process_name,"Serveur de consultation");
+
+        // mise en place des gestionnaires de signaux,
+        // sémaphore bianire, mémoire partagée et file de messages
+        initServer(key);
+        
         while (1)
         {
             // on se met en attente d'un message de type REQUEST_CONSULT
@@ -103,16 +106,16 @@ int main(void)
     }
     else
     {
-        process_name = "Serveur de reservation";
-        // mise en place / récupération du segment de mémoire partagé
-        //setupSharedMem(key);
-        initServer(key);
-
         // process père en charge des réservations
-        printf("%s : en attente de requetes...\n", process_name);
+        strcpy(process_name,"Serveur de reservation");
+        // mise en place des gestionnaires de signaux,
+        // sémaphore bianire, mémoire partagée et file de messages
+        initServer(key);
+        
         while (1)
         {
             // on se met en attente d'un message de type REQUEST_RESA
+            printf("%s : en attente de requetes...\n", process_name);
             if ((return_value = msgrcv(msg_queue_id, &msg_req, sizeof(Request) - sizeof(long), REQUEST_RESA, 0)) == -1)
             {
                 perror("Echec msgrcv.\n");
@@ -122,11 +125,17 @@ int main(void)
             if (pid == 0)
             {
                 // process fils
-                printf("Requete de Reservation de %d places pour le spectacle %s.\n", msg_req.msg.nb_seats, msg_req.msg.show_id);
+                sprintf(process_name, "Serveur de reservation N%d", getpid());
+                printf("%s : Requete de Reservation de %d places pour le spectacle %s.\n", process_name, msg_req.msg.nb_seats, msg_req.msg.show_id);
+
+                //Récup et attachement du segment paratagé
+                setupSharedMem(key);
+
+                //préparation de la réponse
                 msg_resp.msg_type = msg_req.pid;
                 msg_resp.msg = msg_req.msg;
-
                 bookSeats(&msg_resp.msg);
+
                 // envoi de la réponse
                 if ((return_value = msgsnd(msg_queue_id, &msg_resp, sizeof(Response) - sizeof(long), 0)) == -1)
                 {
@@ -141,10 +150,15 @@ int main(void)
     }
 }
 
-// handler pour signal SIGINT
+/**
+ * @brief Gère le signal d'interruption (SIGINT) pour terminer proprement le programme.
+ *
+ * Libère les ressources : file de message, semaphore, segment de mémoire partagé.
+ *
+ * @param sig Le numéro du signal (non utilisé dans cette fonction).
+ */
 void sigint_handler(int sig)
 {
-
     printf("\n");
     printf("%s : Suppression de la queue.\n", process_name);
     msgctl(msg_queue_id, IPC_RMID, NULL);
@@ -193,6 +207,15 @@ void setupSignalHandlers()
     }
 }
 
+/**
+ * @brief Initialise un server (appelé par le server de consult ET le server de résa).
+ * 
+ * Configure les handlers de signaux, le sémaphore,
+ * le segment de mémoire partagée et la file de messages
+ * 
+ * @note : le premier process à créer le segement partagé 
+ * est aussi en charge de créer le tableau des données.
+ */
 void initServer(key_t key)
 {
     srand(time(NULL)); // reset de la seed pour le nb de places aléatoire
@@ -213,10 +236,20 @@ void initServer(key_t key)
     printf("%s : 'Ctrl + c' pour mettre fin au programme.\n", process_name);
 }
 
+/**
+ * @brief Crée/récupère un tableau de 1 sémaphore et l'initie à 1 (sémaphore binaire)
+ * 
+ * Utilise la clef en paragmètre pour identifier le sémaphore.
+ * Si la tentative de création échoue, alors on tente une récupération
+ * 
+ *  
+ * @param key_t la clef identifiant l'outil IPC
+ */
 void setupSemaphoreSet(key_t key) {
-    // Création ou récupération (si déjà créé) d'un tableau de 1 semaphore
+    // Création d'un tableau de 1 semaphore
     if ((semset_id = semget(key, 1, IPC_CREAT | IPC_EXCL | 0666)) == -1)
     {
+        // la création a échoué
         if (errno == EEXIST)
         {
             //le tableau de semaphore existe déjà, on le récupère
@@ -225,6 +258,7 @@ void setupSemaphoreSet(key_t key) {
         }
         else
         {
+            // tout à échoué, on abandonne
             perror("Creation du tableau des semaphores : Echec.\n");
             fprintf(stderr, "Erreur %d : %s\n", errno, strerror(errno));
             exit(EXIT_FAILURE);
@@ -236,6 +270,17 @@ void setupSemaphoreSet(key_t key) {
     semctl(semset_id, 0, SETVAL, 1);
 }
 
+/**
+ * @brief Récupère / ou crée le segment de mémoire partagé
+ * 
+ * Utilise la clef en paragmètre pour identifier un segment paratgé.
+ * Si la tentative de récupération échoue, alors on tente une création
+ * 
+ * @note Le processus qui crée (en premier) le segment paratgé est aussi celui 
+ * qui est responsable du remplissage de la ressource (populateResource()).
+ * 
+ * @param key_t la clef identifiant l'outil IPC
+ */
 void setupSharedMem(key_t key)
 {
     // mise en place du segment de mémoire partagée
@@ -277,6 +322,8 @@ void setupSharedMem(key_t key)
         {
             perror("Erreur lors de l attachement a la memoire partagee");
             exit(EXIT_FAILURE);
+        } else {
+            printf("%s : Segment de memoire partage attache.\n", process_name);
         }
     }
 }
@@ -362,6 +409,15 @@ void setupMsgQueue(key_t key) {
     }
 }
 
+/**
+ * @brief retourne le nb de place d'un spectacle passé en paramètre
+ * 
+ * l'accès en lecture à la ressource est protégé par un sémaphore binaire (mutex)
+ * 
+ * note : la partie recherche d'index est hors de la section critique
+ * 
+ * @param Message* un pointeur qui va recevoir le nb de places
+ */
 void getNbSeats(Message *msg)
 {
     struct sembuf operations[1];
@@ -395,6 +451,18 @@ void getNbSeats(Message *msg)
     return;
 }
 
+/**
+ * @brief Tente de Réserver le nb de place demandé pour le spectacle passé en paramètre
+ * 
+ * vérifie si la requete est possible (nb places restantes >= nb de places demandées)
+ * 
+ * l'accès en écriture à la ressource est protégé est protégé par un sémaphore binaire (mutex)
+ * 
+ * note : la partie recherche d'index est hors de la section critique
+ * 
+ * @param Message* nb de places > 0 : réservation acceptée pour le nb_places
+ *                              <= 0 : réservation refusée nb de places restantes en négatif
+ */
 void bookSeats(Message *msg)
 {
     struct sembuf operations[1];

@@ -21,9 +21,10 @@ Compilation :
 Utilisation :
 -------------
 
->> blabla <options> [<arguments...>]
-options : blabla
-arguments : blabla
+Après compilation lancer les programmes dans des fenetre de terminal séparées
+$ ./server 
+$ ./client 
+l'ordre d'exécution n'a pas d'importance.
 
 Contenu :
 ---------
@@ -31,15 +32,15 @@ Contenu :
 coirier_romain\ : Racine du Projet
 |
 |-question1\ : Résolution du projet avec utilisation de processus légers
-|  |-common.h : 
-|  |-client.c : 
-|  |-server.c : 
+|  |-common.h : source du header commun au client et au serveur
+|  |-client.c : source du client
+|  |-server.c : source du serveur
 |  |-compile_and_run.sh : script bash pour compiler et lancer les 2 executables
 |
 |-question2\ : Résolution du projet avec utilisation de processus lourds
-|  |-common.h : 
-|  |-client.c : 
-|  |-server.c :
+|  |-common.h : source du header commun au client et au serveur
+|  |-client.c : source du client
+|  |-server.c : source du serveur
 |  |-compile_and_run.sh : script bash pour compiler et lancer les 2 executables
 |
 |-rapport.pdf : Rapport explicatif du projet
